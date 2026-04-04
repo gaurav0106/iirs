@@ -12,7 +12,7 @@ from .agents import (
     make_planner_node,
     make_retriever_node,
 )
-from .backends import MockTelemetryBackend, RunbookStore
+from .backends import RunbookStore, build_telemetry_backend
 from .config import Settings, load_settings
 from .models import AlertPayload, ConversationTurn, IIRSState
 from .scenarios import build_alert_for_scenario, get_builtin_scenarios
@@ -35,7 +35,7 @@ class IIRSPipeline:
         self.settings = settings or load_settings()
         self.scenarios = get_builtin_scenarios()
         self.context = AgentContext(
-            telemetry=MockTelemetryBackend(),
+            telemetry=build_telemetry_backend(self.settings),
             runbooks=RunbookStore(self.settings.runbooks_dir),
             scenarios=self.scenarios,
         )
