@@ -1,0 +1,47 @@
+{
+  "scenario_name": "postgres_down",
+  "expected_root_cause": "PostgreSQL dependency outage",
+  "required_evidence": [
+    {
+      "description": "Loki error logs were collected for checkoutservice",
+      "category": "logs",
+      "source_type": "loki",
+      "query_contains": "service_name=\"checkoutservice\""
+    },
+    {
+      "description": "Prometheus latency evidence was collected for checkoutservice",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "histogram_quantile"
+    },
+    {
+      "description": "Prometheus 5xx evidence was collected for checkoutservice",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "status=~\"5..\""
+    },
+    {
+      "description": "Tempo failed-trace evidence was collected for checkoutservice",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "status = error"
+    },
+    {
+      "description": "PostgreSQL runbook guidance was included",
+      "category": "runbook_hits",
+      "source_type": "runbook",
+      "query_contains": "postgresql troubleshooting"
+    }
+  ],
+  "required_action_keywords": [
+    "Inspect PostgreSQL health",
+    "Restart or fail over PostgreSQL"
+  ],
+  "required_action_types": [
+    "auto-safe",
+    "needs-approval"
+  ],
+  "notes": [
+    "Quantitative evaluation label for the reproducible postgres_down scenario."
+  ]
+}

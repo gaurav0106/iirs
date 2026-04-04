@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .backends import RunbookStore, TelemetryBackend
+from .llm import OpenAIRequestError, ReasoningClient
 from .models import (
     AgentRun,
     AlertPayload,
@@ -27,6 +28,7 @@ class AgentContext:
     telemetry: TelemetryBackend
     runbooks: RunbookStore
     scenarios: dict[str, ScenarioDefinition]
+    llm: ReasoningClient | None = None
 
 
 def infer_scenario(alert: AlertPayload, scenarios: dict[str, ScenarioDefinition]) -> str:
@@ -69,6 +71,295 @@ def _record_tool_call(
         started_at=started_at,
         finished_at=utc_now(),
     )
+
+
+def _clamp_confidence(value: object, default: float = 0.5) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, numeric))
+
+
+def _normalize_root_cause_title(title: str) -> str:
+    lowered = title.lower()
+    postgres_terms = ("postgres", "postgresql")
+    redis_terms = ("redis",)
+    outage_terms = ("outage", "down", "unavailable", "dependency", "connection refused")
+    if any(term in lowered for term in postgres_terms) and any(term in lowered for term in outage_terms):
+        return "PostgreSQL dependency outage"
+    if any(term in lowered for term in redis_terms) and any(term in lowered for term in outage_terms):
+        return "Redis dependency outage"
+    return title.strip() or "Unknown root cause"
+
+
+def _filter_evidence_ids(candidate_ids: object, valid_ids: set[str]) -> list[str]:
+    values = candidate_ids if isinstance(candidate_ids, list) else []
+    result: list[str] = []
+    for value in values:
+        text = str(value)
+        if text in valid_ids and text not in result:
+            result.append(text)
+    return result
+
+
+def _normalize_text_list(values: object, fallback: list[str]) -> list[str]:
+    if not isinstance(values, list):
+        return fallback
+    normalized = [str(value).strip() for value in values if str(value).strip()]
+    return normalized or fallback
+
+
+def _deterministic_hypotheses(state: IIRSState, scenario: ScenarioDefinition) -> list[Hypothesis]:
+    bundle = state["evidence_bundle"]
+    all_items = bundle.all_items()
+    evidence_ids = [item.id for item in all_items]
+    primary_support = evidence_ids[: min(5, len(evidence_ids))]
+    change_ids = [item.id for item in bundle.change_signals]
+    trace_ids = [item.id for item in bundle.traces]
+
+    return [
+        Hypothesis(
+            rank=1,
+            title=scenario.expected_root_cause,
+            confidence=0.93 if len(primary_support) >= 5 else 0.84,
+            supporting_evidence_ids=primary_support,
+            contradicting_evidence_ids=change_ids[:1],
+            next_checks=scenario.follow_up_checks,
+        ),
+        Hypothesis(
+            rank=2,
+            title=scenario.secondary_hypothesis,
+            confidence=0.46,
+            supporting_evidence_ids=trace_ids[:2] or primary_support[:2],
+            contradicting_evidence_ids=change_ids[:1],
+            next_checks=[
+                "Confirm whether request workers recover immediately once the dependency is restored.",
+                "Inspect connection-pool saturation and retry pressure.",
+            ],
+        ),
+        Hypothesis(
+            rank=3,
+            title="Recent deploy or configuration regression",
+            confidence=0.18 if change_ids else 0.08,
+            supporting_evidence_ids=change_ids[:1],
+            contradicting_evidence_ids=primary_support[:3],
+            next_checks=[
+                "Review deployment metadata and config drift only if dependency health is normal.",
+            ],
+        ),
+    ]
+
+
+def _llm_hypotheses(context: AgentContext, state: IIRSState, scenario: ScenarioDefinition) -> list[Hypothesis]:
+    if context.llm is None:
+        return _deterministic_hypotheses(state, scenario)
+
+    response = context.llm.analyze_incident(state)
+    all_items = state["evidence_bundle"].all_items()
+    valid_ids = {item.id for item in all_items}
+    default_support = [item.id for item in all_items[:3]]
+    hypotheses: list[Hypothesis] = []
+    for index, raw in enumerate(response.get("hypotheses", [])[:3], start=1):
+        supporting_ids = _filter_evidence_ids(raw.get("supporting_evidence_ids"), valid_ids) or default_support
+        next_checks = _normalize_text_list(raw.get("next_checks"), scenario.follow_up_checks)[:3]
+        hypotheses.append(
+            Hypothesis(
+                rank=index,
+                title=_normalize_root_cause_title(str(raw.get("title", "")).strip()),
+                confidence=_clamp_confidence(raw.get("confidence"), default=0.5),
+                supporting_evidence_ids=supporting_ids,
+                contradicting_evidence_ids=_filter_evidence_ids(raw.get("contradicting_evidence_ids"), valid_ids),
+                next_checks=next_checks,
+            )
+        )
+
+    if not hypotheses:
+        return _deterministic_hypotheses(state, scenario)
+    return hypotheses
+
+
+def _deterministic_critique(state: IIRSState) -> Critique:
+    bundle = state["evidence_bundle"]
+    hypotheses = state["hypotheses"]
+    source_types = {
+        citation.source_type
+        for item in bundle.all_items()
+        for citation in item.citations
+    }
+
+    hallucination_risks: list[str] = []
+    if len(source_types) < 3:
+        hallucination_risks.append(
+            "The root-cause ranking is backed by fewer than three evidence source types."
+        )
+    if not bundle.runbook_hits:
+        hallucination_risks.append("No runbook guidance was matched for this incident.")
+
+    missing_data = []
+    if not bundle.change_signals:
+        missing_data.append("No change feed result was captured near incident start.")
+    if not bundle.traces:
+        missing_data.append("No trace evidence was collected.")
+
+    findings = [
+        CritiqueFinding(
+            severity="info",
+            message="Top hypothesis is grounded in logs, metrics, and traces with explicit citations.",
+            evidence_ids=hypotheses[0].supporting_evidence_ids[:3],
+        )
+    ]
+
+    if hypotheses[0].confidence >= 0.9 and bundle.change_signals:
+        findings.append(
+            CritiqueFinding(
+                severity="warning",
+                message=(
+                    "Recent-change evidence does not explain the incident, so remediation should focus on "
+                    "dependency availability first."
+                ),
+                evidence_ids=[item.id for item in bundle.change_signals],
+            )
+        )
+
+    return Critique(
+        relevant_evidence_ids=hypotheses[0].supporting_evidence_ids,
+        hallucination_risks=hallucination_risks,
+        missing_data=missing_data,
+        safety_notes=[
+            "Keep all actions read-only until a human approves dependency restarts or traffic changes.",
+            "Treat rollback or restart recommendations as needs-approval actions.",
+        ],
+        findings=findings,
+    )
+
+
+def _llm_critique(context: AgentContext, state: IIRSState) -> Critique:
+    if context.llm is None:
+        return _deterministic_critique(state)
+
+    response = context.llm.critique_incident(state)
+    valid_ids = {item.id for item in state["evidence_bundle"].all_items()}
+    findings: list[CritiqueFinding] = []
+    for raw in response.get("findings", []):
+        severity = str(raw.get("severity", "info")).strip().lower()
+        if severity not in {"info", "warning", "critical"}:
+            severity = "info"
+        findings.append(
+            CritiqueFinding(
+                severity=severity,
+                message=str(raw.get("message", "")).strip() or "No critique message provided.",
+                evidence_ids=_filter_evidence_ids(raw.get("evidence_ids"), valid_ids),
+            )
+        )
+
+    critique = Critique(
+        relevant_evidence_ids=_filter_evidence_ids(response.get("relevant_evidence_ids"), valid_ids),
+        hallucination_risks=_normalize_text_list(response.get("hallucination_risks"), []),
+        missing_data=_normalize_text_list(response.get("missing_data"), []),
+        safety_notes=_normalize_text_list(
+            response.get("safety_notes"),
+            ["Treat state-changing remediation as needs-approval."],
+        ),
+        findings=findings,
+    )
+    if not critique.relevant_evidence_ids and state["hypotheses"]:
+        critique.relevant_evidence_ids = state["hypotheses"][0].supporting_evidence_ids
+    return critique
+
+
+def _deterministic_plan(state: IIRSState, scenario: ScenarioDefinition) -> tuple[list[PlanStep], IncidentBrief]:
+    hypotheses = state["hypotheses"]
+    critique = state["critique"]
+    bundle = state["evidence_bundle"]
+    top_evidence = hypotheses[0].supporting_evidence_ids[:3]
+
+    steps: list[PlanStep] = []
+    for index, description in enumerate(scenario.safe_actions, start=1):
+        steps.append(
+            PlanStep(
+                order=index,
+                description=description,
+                action_type="auto-safe",
+                rationale="Read-only diagnostic step supported by retrieved telemetry.",
+                evidence_ids=top_evidence,
+            )
+        )
+
+    start_order = len(steps) + 1
+    for offset, description in enumerate(scenario.approval_actions, start=0):
+        steps.append(
+            PlanStep(
+                order=start_order + offset,
+                description=description,
+                action_type="needs-approval",
+                rationale="This changes dependency state or service routing and must stay human-approved.",
+                evidence_ids=top_evidence,
+            )
+        )
+
+    brief = IncidentBrief(
+        title=f"Incident Brief: {scenario.name}",
+        summary=(
+            f"Most likely root cause: {hypotheses[0].title}. "
+            f"Evidence spans logs, metrics, traces, and runbook guidance for {scenario.service}."
+        ),
+        probable_root_causes=hypotheses,
+        recommended_actions=steps,
+        open_questions=critique.missing_data or ["No unresolved data gaps in the mock scenario."],
+        evidence_snapshot=[item.summary for item in bundle.all_items()[:5]],
+    )
+    return steps, brief
+
+
+def _llm_plan(context: AgentContext, state: IIRSState, scenario: ScenarioDefinition) -> tuple[list[PlanStep], IncidentBrief]:
+    if context.llm is None:
+        return _deterministic_plan(state, scenario)
+
+    response = context.llm.plan_incident(state)
+    valid_ids = {item.id for item in state["evidence_bundle"].all_items()}
+    top_evidence = state["hypotheses"][0].supporting_evidence_ids[:3]
+    steps: list[PlanStep] = []
+    for order, raw in enumerate(response.get("steps", [])[:6], start=1):
+        description = str(raw.get("description", "")).strip()
+        if not description:
+            continue
+        action_type = str(raw.get("action_type", "auto-safe")).strip()
+        if action_type not in {"auto-safe", "needs-approval"}:
+            lowered = description.lower()
+            if any(term in lowered for term in {"restart", "rollback", "fail over", "failover", "repoint"}):
+                action_type = "needs-approval"
+            else:
+                action_type = "auto-safe"
+        evidence_ids = _filter_evidence_ids(raw.get("evidence_ids"), valid_ids) or top_evidence
+        steps.append(
+            PlanStep(
+                order=order,
+                description=description,
+                action_type=action_type,
+                rationale=str(raw.get("rationale", "")).strip() or "Model-generated triage step.",
+                evidence_ids=evidence_ids,
+            )
+        )
+
+    if not steps:
+        return _deterministic_plan(state, scenario)
+
+    brief = IncidentBrief(
+        title=str(raw_title).strip() if (raw_title := response.get("brief_title")) else f"Incident Brief: {scenario.name}",
+        summary=str(raw_summary).strip() if (raw_summary := response.get("brief_summary")) else f"Most likely root cause: {state['hypotheses'][0].title}.",
+        probable_root_causes=state["hypotheses"],
+        recommended_actions=steps,
+        open_questions=_normalize_text_list(
+            response.get("open_questions"),
+            state["critique"].missing_data or ["No unresolved data gaps captured."],
+        )[:4],
+        evidence_snapshot=_normalize_text_list(
+            response.get("evidence_snapshot"),
+            [item.summary for item in state["evidence_bundle"].all_items()[:5]],
+        )[:5],
+    )
+    return steps, brief
 
 
 def make_retriever_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
@@ -194,44 +485,13 @@ def make_retriever_node(context: AgentContext) -> Callable[[IIRSState], dict[str
 def make_analyst_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def analyst(state: IIRSState) -> dict[str, object]:
         scenario = context.scenarios[state["scenario_name"]]
-        bundle = state["evidence_bundle"]
-        all_items = bundle.all_items()
-        evidence_ids = [item.id for item in all_items]
-        primary_support = evidence_ids[: min(5, len(evidence_ids))]
-        change_ids = [item.id for item in bundle.change_signals]
-        trace_ids = [item.id for item in bundle.traces]
-
-        hypotheses = [
-            Hypothesis(
-                rank=1,
-                title=scenario.expected_root_cause,
-                confidence=0.93 if len(primary_support) >= 5 else 0.84,
-                supporting_evidence_ids=primary_support,
-                contradicting_evidence_ids=change_ids[:1],
-                next_checks=scenario.follow_up_checks,
-            ),
-            Hypothesis(
-                rank=2,
-                title=scenario.secondary_hypothesis,
-                confidence=0.46,
-                supporting_evidence_ids=trace_ids[:2] or primary_support[:2],
-                contradicting_evidence_ids=change_ids[:1],
-                next_checks=[
-                    "Confirm whether request workers recover immediately once the dependency is restored.",
-                    "Inspect connection-pool saturation and retry pressure.",
-                ],
-            ),
-            Hypothesis(
-                rank=3,
-                title="Recent deploy or configuration regression",
-                confidence=0.18 if change_ids else 0.08,
-                supporting_evidence_ids=change_ids[:1],
-                contradicting_evidence_ids=primary_support[:3],
-                next_checks=[
-                    "Review deployment metadata and config drift only if dependency health is normal.",
-                ],
-            ),
-        ]
+        all_items = state["evidence_bundle"].all_items()
+        fallback_reason: str | None = None
+        try:
+            hypotheses = _llm_hypotheses(context, state, scenario)
+        except OpenAIRequestError as exc:
+            hypotheses = _deterministic_hypotheses(state, scenario)
+            fallback_reason = f"Fell back to deterministic analysis after OpenAI error: {exc}"
 
         agent_run = AgentRun(
             agent_name="Analyst",
@@ -241,6 +501,7 @@ def make_analyst_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
             output_summary=(
                 f"Ranked root causes with top hypothesis '{hypotheses[0].title}' "
                 f"at confidence {hypotheses[0].confidence:.2f}."
+                + (f" {fallback_reason}" if fallback_reason else "")
             ),
         )
 
@@ -250,7 +511,11 @@ def make_analyst_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
             "messages": _append_message(
                 state,
                 "assistant",
-                f"Analyst ranked '{hypotheses[0].title}' as the most likely root cause.",
+                (
+                    f"Analyst ranked '{hypotheses[0].title}' as the most likely root cause."
+                    if fallback_reason is None
+                    else f"Analyst ranked '{hypotheses[0].title}' as the most likely root cause after deterministic fallback."
+                ),
             ),
         }
 
@@ -261,56 +526,12 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
     def critic(state: IIRSState) -> dict[str, object]:
         bundle = state["evidence_bundle"]
         hypotheses = state["hypotheses"]
-        source_types = {
-            citation.source_type
-            for item in bundle.all_items()
-            for citation in item.citations
-        }
-
-        hallucination_risks: list[str] = []
-        if len(source_types) < 3:
-            hallucination_risks.append(
-                "The root-cause ranking is backed by fewer than three evidence source types."
-            )
-        if not bundle.runbook_hits:
-            hallucination_risks.append("No runbook guidance was matched for this incident.")
-
-        missing_data = []
-        if not bundle.change_signals:
-            missing_data.append("No change feed result was captured near incident start.")
-        if not bundle.traces:
-            missing_data.append("No trace evidence was collected.")
-
-        findings = [
-            CritiqueFinding(
-                severity="info",
-                message="Top hypothesis is grounded in logs, metrics, and traces with explicit citations.",
-                evidence_ids=hypotheses[0].supporting_evidence_ids[:3],
-            )
-        ]
-
-        if hypotheses[0].confidence >= 0.9 and bundle.change_signals:
-            findings.append(
-                CritiqueFinding(
-                    severity="warning",
-                    message=(
-                        "Recent-change evidence does not explain the incident, so remediation should focus on "
-                        "dependency availability first."
-                    ),
-                    evidence_ids=[item.id for item in bundle.change_signals],
-                )
-            )
-
-        critique = Critique(
-            relevant_evidence_ids=hypotheses[0].supporting_evidence_ids,
-            hallucination_risks=hallucination_risks,
-            missing_data=missing_data,
-            safety_notes=[
-                "Keep all actions read-only until a human approves dependency restarts or traffic changes.",
-                "Treat rollback or restart recommendations as needs-approval actions.",
-            ],
-            findings=findings,
-        )
+        fallback_reason: str | None = None
+        try:
+            critique = _llm_critique(context, state)
+        except OpenAIRequestError as exc:
+            critique = _deterministic_critique(state)
+            fallback_reason = f"Fell back to deterministic critique after OpenAI error: {exc}"
 
         agent_run = AgentRun(
             agent_name="Critic",
@@ -320,6 +541,7 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
             output_summary=(
                 f"Generated {len(critique.findings)} findings and "
                 f"{len(critique.hallucination_risks)} hallucination-risk checks."
+                + (f" {fallback_reason}" if fallback_reason else "")
             ),
         )
 
@@ -329,7 +551,11 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
             "messages": _append_message(
                 state,
                 "assistant",
-                "Critic validated citation coverage and highlighted approval boundaries.",
+                (
+                    "Critic validated citation coverage and highlighted approval boundaries."
+                    if fallback_reason is None
+                    else "Critic fell back to deterministic validation after an OpenAI timeout or API error."
+                ),
             ),
         }
 
@@ -339,46 +565,7 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
 def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def planner(state: IIRSState) -> dict[str, object]:
         scenario = context.scenarios[state["scenario_name"]]
-        hypotheses = state["hypotheses"]
-        critique = state["critique"]
-        bundle = state["evidence_bundle"]
-        top_evidence = hypotheses[0].supporting_evidence_ids[:3]
-
-        steps: list[PlanStep] = []
-        for index, description in enumerate(scenario.safe_actions, start=1):
-            steps.append(
-                PlanStep(
-                    order=index,
-                    description=description,
-                    action_type="auto-safe",
-                    rationale="Read-only diagnostic step supported by retrieved telemetry.",
-                    evidence_ids=top_evidence,
-                )
-            )
-
-        start_order = len(steps) + 1
-        for offset, description in enumerate(scenario.approval_actions, start=0):
-            steps.append(
-                PlanStep(
-                    order=start_order + offset,
-                    description=description,
-                    action_type="needs-approval",
-                    rationale="This changes dependency state or service routing and must stay human-approved.",
-                    evidence_ids=top_evidence,
-                )
-            )
-
-        brief = IncidentBrief(
-            title=f"Incident Brief: {scenario.name}",
-            summary=(
-                f"Most likely root cause: {hypotheses[0].title}. "
-                f"Evidence spans logs, metrics, traces, and runbook guidance for {scenario.service}."
-            ),
-            probable_root_causes=hypotheses,
-            recommended_actions=steps,
-            open_questions=critique.missing_data or ["No unresolved data gaps in the mock scenario."],
-            evidence_snapshot=[item.summary for item in bundle.all_items()[:5]],
-        )
+        steps, brief = _deterministic_plan(state, scenario)
 
         agent_run = AgentRun(
             agent_name="Planner",
@@ -404,7 +591,13 @@ def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
     return planner
 
 
-def answer_follow_up(question: str, state: IIRSState) -> str:
+def answer_follow_up(question: str, state: IIRSState, llm: ReasoningClient | None = None) -> str:
+    if llm is not None:
+        try:
+            return llm.answer_follow_up(question, state)
+        except OpenAIRequestError:
+            pass
+
     bundle = state["evidence_bundle"]
     brief = state["incident_brief"]
     evidence_lookup = bundle.by_id()

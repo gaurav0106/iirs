@@ -14,6 +14,7 @@ from .agents import (
 )
 from .backends import RunbookStore, build_telemetry_backend
 from .config import Settings, load_settings
+from .llm import ReasoningClient, build_reasoning_client
 from .models import AlertPayload, ConversationTurn, IIRSState
 from .scenarios import build_alert_for_scenario, get_builtin_scenarios
 from .utils import read_json, utc_now, write_json
@@ -31,13 +32,19 @@ class LinearGraphRunner:
 
 
 class IIRSPipeline:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        reasoning_client: ReasoningClient | None = None,
+    ) -> None:
         self.settings = settings or load_settings()
         self.scenarios = get_builtin_scenarios()
         self.context = AgentContext(
             telemetry=build_telemetry_backend(self.settings),
             runbooks=RunbookStore(self.settings.runbooks_dir),
             scenarios=self.scenarios,
+            llm=reasoning_client if reasoning_client is not None else build_reasoning_client(self.settings),
         )
         self.runner, self.used_langgraph = self._build_runner()
 
@@ -97,7 +104,7 @@ class IIRSPipeline:
         return self.run(self.build_alert_for_scenario(scenario_name))
 
     def follow_up(self, question: str, state: IIRSState) -> str:
-        return answer_follow_up(question, state)
+        return answer_follow_up(question, state, self.context.llm)
 
     def _write_trace(self, state: IIRSState) -> Path:
         incident_id = state["alert"].incident_id

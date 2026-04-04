@@ -1,4 +1,4 @@
-# Issue #1 implementation status
+# Implementation Status
 
 This repository started with only the capstone proposal PDF. The current slice implements the minimum working software skeleton behind the issue.
 
@@ -15,15 +15,17 @@ This repository started with only the capstone proposal PDF. The current slice i
 9. Local observability stack assets for Prometheus, Loki, Tempo, and the OpenTelemetry Collector.
 10. Helper scripts and docs for bootstrapping the upstream Aspire Shop sample against that stack.
 11. Automated PostgreSQL and Redis fault-injection helpers for the Aspire Shop demo.
+12. Ground-truth labels plus a quantitative evaluation harness for Top-1 and Top-3 scoring.
+13. OpenAI-backed Analyst, Critic, and follow-up responses with local-only key loading.
 
 ## Still open from the issue
 
 1. Aspire Shop is still fetched from the upstream sample repository rather than being vendored or fully automated as part of this repo.
 2. The live PostgreSQL and Redis fault scenarios are not validated automatically against expected telemetry signatures yet.
-3. The agent reasoning is deterministic rather than backed by OpenAI models.
-4. Quantitative Top-1 and Top-3 evaluation runs are not implemented yet.
-5. Qualitative evaluation workflows, demo automation, Codespaces, and the final report remain open.
+3. Retriever and Planner remain deterministic; only Analyst, Critic, and follow-up answers use OpenAI today.
+4. Qualitative evaluation workflows for evidence quality and Critic catch rate are not implemented yet.
+5. Demo automation, Codespaces, and the final report remain open.
 
 ## Recommended next step
 
-The next practical milestone is adding scenario validation and evaluation so the live telemetry path becomes measurable instead of just runnable.
+The next practical milestone is adding live telemetry signature checks plus qualitative review scoring so the end-to-end demo is validated, not just measured.

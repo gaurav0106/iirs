@@ -1,0 +1,47 @@
+{
+  "scenario_name": "redis_down",
+  "expected_root_cause": "Redis dependency outage",
+  "required_evidence": [
+    {
+      "description": "Loki error logs were collected for cartservice",
+      "category": "logs",
+      "source_type": "loki",
+      "query_contains": "service_name=\"cartservice\""
+    },
+    {
+      "description": "Prometheus latency evidence was collected for cartservice",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "histogram_quantile"
+    },
+    {
+      "description": "Prometheus 5xx evidence was collected for cartservice",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "status=~\"5..\""
+    },
+    {
+      "description": "Tempo failed-trace evidence was collected for cartservice",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "status = error"
+    },
+    {
+      "description": "Redis runbook guidance was included",
+      "category": "runbook_hits",
+      "source_type": "runbook",
+      "query_contains": "redis troubleshooting"
+    }
+  ],
+  "required_action_keywords": [
+    "Inspect Redis health",
+    "Restart or fail over Redis"
+  ],
+  "required_action_types": [
+    "auto-safe",
+    "needs-approval"
+  ],
+  "notes": [
+    "Quantitative evaluation label for the reproducible redis_down scenario."
+  ]
+}

@@ -40,5 +40,5 @@ Next steps:
        curl -s -G http://localhost:3100/loki/api/v1/query --data-urlencode 'query={service_name="catalogservice"}'
        curl -s -G http://localhost:3200/api/search --data-urlencode 'q={ resource.service.name = "catalogservice" }'
 
-See docs/aspire-shop-local-stack.md for the full walkthrough.
+See README.md for the full local stack walkthrough.
 EOF
