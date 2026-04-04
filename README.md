@@ -1,21 +1,25 @@
 # IIRS
 
-IIRS is an incident-response assistant scaffold for issue [#1](https://github.com/gaurav0106/iirs/issues/1). This repository now contains a runnable foundation slice instead of just the project proposal.
+IIRS is an incident-response assistant scaffold for issue [#1](https://github.com/gaurav0106/iirs/issues/1). This repository now contains a runnable capstone implementation slice instead of just the project proposal.
 
-The current implementation focuses on the software skeleton the issue calls for:
+The current implementation includes the core plumbing behind the issue:
 
 - a shared incident state model
 - a linear 4-stage pipeline: `Retriever -> Analyst -> Critic -> Planner`
-- deterministic mock telemetry for the two required fault scenarios: `postgres_down` and `redis_down`
+- deterministic incident analysis for the two required fault scenarios: `postgres_down` and `redis_down`
 - structured evidence with citations
 - JSON reasoning traces written per incident
 - a CLI entrypoint
 - a Chainlit app entrypoint for interactive demo flows
+- a live Prometheus, Loki, and Tempo backend adapter
+- local observability stack assets plus Aspire Shop bootstrap instructions
+- automated PostgreSQL and Redis fault injection helpers for the Aspire Shop demo
 
-What is not in this slice yet:
+What is still open:
 
-- live Aspire Shop / PLT stack integration
+- vendoring or fully automating Aspire Shop startup inside this repo
 - real OpenAI-backed agent prompting
+- automated telemetry-signature validation for the live fault scenarios
 - automated quantitative and qualitative evaluation runs
 
 ## Quickstart
@@ -113,7 +117,7 @@ What you should see:
 
 ### Live PLT end-to-end
 
-Use this only if Prometheus, Loki, and Tempo are already reachable. This repo does not provision that stack yet.
+Use this if Prometheus, Loki, and Tempo are already reachable. You can point IIRS at an external stack or use the local stack assets documented in `docs/aspire-shop-local-stack.md`.
 
 Set the live backend:
 
@@ -178,6 +182,7 @@ python3 -m unittest discover -s tests
 - `tests/`: unit and integration coverage for the mock pipeline
 - `docs/issue-1-status.md`: what this slice covers and what is still open against issue #1
 - `docs/aspire-shop-local-stack.md`: walkthrough for wiring Aspire Shop into the local stack
+- `docs/fault-injection.md`: automated PostgreSQL and Redis outage workflow for Aspire Shop
 - `docs/live-backend.md`: details for the real PLT adapter mode
 
 ## Configuration
@@ -191,6 +196,6 @@ Environment variables:
 
 ## Current behavior
 
-The pipeline is intentionally deterministic so the capstone can be developed and tested locally before the real observability stack and live models are connected. The abstractions are already shaped around the issue requirements, so the next iteration can replace the mock backend and deterministic reasoning without rewriting the core flow.
+The pipeline is intentionally deterministic so the capstone can be developed and tested locally before the model-backed reasoning layer is added. The abstractions are already shaped around the issue requirements, so the next iteration can focus on live scenario validation and evaluation without rewriting the core flow.
 
-Current limitation for true end-to-end demos: this repo now includes a local PLT stack, but it still does not vendor Aspire Shop itself or automate outage injection. The mock scenarios are still the most reliable e2e path until the sample startup and fault scenarios are fully scripted.
+Current limitation for true end-to-end demos: this repo now includes a local PLT stack and automated fault injection, but it still relies on the upstream Aspire Shop sample and does not yet validate telemetry signatures or evaluation metrics automatically. The mock scenarios remain the fastest repeatable e2e path until the live demo loop is fully scripted.

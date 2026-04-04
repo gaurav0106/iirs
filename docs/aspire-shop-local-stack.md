@@ -118,12 +118,42 @@ What you should expect:
 - trace artifacts include live citation sources
 - Retriever evidence IDs look like `log.live.*`, `metric.live.*`, and `trace.live.*`
 
+## Step 7: Inject a fault
+
+Use the fault-injection helper:
+
+```bash
+./scripts/inject_aspire_fault.sh discover
+./scripts/inject_aspire_fault.sh stop postgres
+```
+
+Or for Redis:
+
+```bash
+./scripts/inject_aspire_fault.sh stop redis
+```
+
+After the fault is active:
+
+1. generate more shop traffic
+2. verify new error logs, higher latency, and failed traces
+3. run IIRS in live mode against the matching alert fixture
+
+Recover after the test:
+
+```bash
+./scripts/inject_aspire_fault.sh start postgres
+./scripts/inject_aspire_fault.sh start redis
+```
+
+See `docs/fault-injection.md` for the full workflow and override options.
+
 ## What is still missing
 
-This phase provisions the observability side and the sample bootstrap workflow, but it does not yet automate fault injection.
+This phase automates outage injection at the container layer, but it does not yet validate the telemetry signatures automatically or score the resulting Incident Briefs.
 
-The next step after this is fault scenario automation:
+The next step after this is scenario validation and evaluation:
 
-1. reliably stop PostgreSQL for the sample
-2. reliably stop Redis for the sample
-3. verify the expected telemetry signatures for each outage
+1. assert the expected telemetry patterns for PostgreSQL down
+2. assert the expected telemetry patterns for Redis down
+3. measure root-cause ranking accuracy against those runs
