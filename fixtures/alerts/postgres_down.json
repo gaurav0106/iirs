@@ -1,0 +1,14 @@
+{
+  "incident_id": "postgres-down-from-file",
+  "summary": "checkoutservice is returning 5xx responses after losing PostgreSQL connectivity.",
+  "severity": "critical",
+  "service": "checkoutservice",
+  "environment": "local-dev",
+  "started_at": "2026-04-04T09:15:00Z",
+  "window_minutes": 15,
+  "scenario": "postgres_down",
+  "labels": {
+    "source": "fixture",
+    "scenario": "postgres_down"
+  }
+}

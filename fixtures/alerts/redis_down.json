@@ -1,0 +1,14 @@
+{
+  "incident_id": "redis-down-from-file",
+  "summary": "cartservice is timing out because Redis is unavailable.",
+  "severity": "critical",
+  "service": "cartservice",
+  "environment": "local-dev",
+  "started_at": "2026-04-04T10:05:00Z",
+  "window_minutes": 15,
+  "scenario": "redis_down",
+  "labels": {
+    "source": "fixture",
+    "scenario": "redis_down"
+  }
+}

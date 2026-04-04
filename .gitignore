@@ -1,1 +1,7 @@
 .envrc
+.venv/
+__pycache__/
+.pytest_cache/
+.chainlit/
+traces/
+*.pyc
