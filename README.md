@@ -171,10 +171,13 @@ python3 -m unittest discover -s tests
 ## Project layout
 
 - `src/iirs/`: application code
+- `infra/observability/`: local Prometheus, Loki, Tempo, and OTel Collector stack
 - `runbooks/`: static troubleshooting documents used by the Retriever
 - `fixtures/alerts/`: sample alert payloads
+- `scripts/`: local helper scripts for the observability stack and Aspire Shop bootstrap
 - `tests/`: unit and integration coverage for the mock pipeline
 - `docs/issue-1-status.md`: what this slice covers and what is still open against issue #1
+- `docs/aspire-shop-local-stack.md`: walkthrough for wiring Aspire Shop into the local stack
 - `docs/live-backend.md`: details for the real PLT adapter mode
 
 ## Configuration
@@ -190,4 +193,4 @@ Environment variables:
 
 The pipeline is intentionally deterministic so the capstone can be developed and tested locally before the real observability stack and live models are connected. The abstractions are already shaped around the issue requirements, so the next iteration can replace the mock backend and deterministic reasoning without rewriting the core flow.
 
-Current limitation for true end-to-end demos: this repo still does not stand up Aspire Shop or the PLT stack itself. The mock scenarios are the reliable e2e path today; the live path works only when those backends already exist.
+Current limitation for true end-to-end demos: this repo now includes a local PLT stack, but it still does not vendor Aspire Shop itself or automate outage injection. The mock scenarios are still the most reliable e2e path until the sample startup and fault scenarios are fully scripted.
