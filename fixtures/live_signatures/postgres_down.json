@@ -1,0 +1,43 @@
+{
+  "scenario_name": "postgres_down",
+  "checks": [
+    {
+      "description": "Loki returned catalogservice error logs",
+      "tool_name": "error_logs",
+      "category": "logs",
+      "source_type": "loki",
+      "query_contains": "service_name=\"catalogservice\""
+    },
+    {
+      "description": "Prometheus returned catalogservice latency evidence",
+      "tool_name": "latency_metrics",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "histogram_quantile"
+    },
+    {
+      "description": "Prometheus returned catalogservice 5xx evidence",
+      "tool_name": "error_rate_metrics",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "http_response_status_code=~\"5..\""
+    },
+    {
+      "description": "Tempo returned failed catalogservice traces",
+      "tool_name": "failed_traces",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "resource.service.name = \"catalogservice\""
+    },
+    {
+      "description": "Tempo returned slow catalogservice traces",
+      "tool_name": "slow_traces",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "trace:duration > 1s"
+    }
+  ],
+  "notes": [
+    "Use this after generating catalog traffic and injecting the PostgreSQL fault."
+  ]
+}

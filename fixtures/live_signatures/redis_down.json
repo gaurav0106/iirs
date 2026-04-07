@@ -1,0 +1,43 @@
+{
+  "scenario_name": "redis_down",
+  "checks": [
+    {
+      "description": "Loki returned basketservice error logs",
+      "tool_name": "error_logs",
+      "category": "logs",
+      "source_type": "loki",
+      "query_contains": "service_name=\"basketservice\""
+    },
+    {
+      "description": "Prometheus returned basketservice latency evidence",
+      "tool_name": "latency_metrics",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "histogram_quantile"
+    },
+    {
+      "description": "Prometheus returned basketservice 5xx evidence",
+      "tool_name": "error_rate_metrics",
+      "category": "metrics",
+      "source_type": "prometheus",
+      "query_contains": "http_response_status_code=~\"5..\""
+    },
+    {
+      "description": "Tempo returned failed basketservice traces",
+      "tool_name": "failed_traces",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "resource.service.name = \"basketservice\""
+    },
+    {
+      "description": "Tempo returned slow basketservice traces",
+      "tool_name": "slow_traces",
+      "category": "traces",
+      "source_type": "tempo",
+      "query_contains": "trace:duration > 1s"
+    }
+  ],
+  "notes": [
+    "Use this after generating basket traffic and injecting the Redis fault."
+  ]
+}

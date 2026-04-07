@@ -56,9 +56,9 @@ class FakeReasoningClient:
         return {
             "summary": "Model planner produced one safe check and one approval step.",
             "brief_title": "Incident Brief: postgres_down",
-            "brief_summary": "PostgreSQL is the most likely failed dependency for checkoutservice.",
+            "brief_summary": "PostgreSQL is the most likely failed dependency for catalogservice.",
             "open_questions": ["Is PostgreSQL healthy at the container layer?"],
-            "evidence_snapshot": ["checkoutservice failed to connect to PostgreSQL"],
+            "evidence_snapshot": ["catalogservice failed to connect to PostgreSQL"],
             "steps": [
                 {
                     "description": "Inspect PostgreSQL health and logs without changing service state.",

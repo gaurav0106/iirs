@@ -38,11 +38,11 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
     return {
         "postgres_down": ScenarioDefinition(
             name="postgres_down",
-            service="checkoutservice",
+            service="catalogservice",
             topic="postgresql troubleshooting",
-            summary="checkoutservice is returning 5xx responses after losing PostgreSQL connectivity.",
+            summary="catalogservice is returning 5xx responses after losing PostgreSQL connectivity.",
             expected_root_cause="PostgreSQL dependency outage",
-            secondary_hypothesis="Checkoutservice connection pool exhaustion caused by database unavailability",
+            secondary_hypothesis="Catalogservice connection pool exhaustion caused by database unavailability",
             follow_up_checks=[
                 "Confirm PostgreSQL container or pod health in the infrastructure layer.",
                 "Verify whether connection failures started at the same time as the HTTP 5xx spike.",
@@ -51,7 +51,7 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
             safe_actions=[
                 "Inspect PostgreSQL health, restart history, and readiness probes without changing state.",
                 "Correlate failing traces with the first DB connection-refused log lines.",
-                "Validate recovery after mitigation by checking 5xx rate and latency for checkoutservice.",
+                "Validate recovery after mitigation by checking 5xx rate and latency for catalogservice.",
             ],
             approval_actions=[
                 "Restart or fail over PostgreSQL if the database remains unavailable.",
@@ -61,7 +61,7 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                 EvidenceSeed(
                     id="log.pg.connection_refused",
                     kind="error_log",
-                    summary="checkoutservice failed to connect to PostgreSQL",
+                    summary="catalogservice failed to connect to PostgreSQL",
                     value="4 connection-refused events in 2m",
                     excerpt="Npgsql.NpgsqlException: Connection refused 10.0.2.15:5432 while handling POST /checkout",
                     observed_at="2026-04-04T09:15:00Z",
@@ -69,7 +69,7 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                 EvidenceSeed(
                     id="log.pg.retry_exhausted",
                     kind="error_log",
-                    summary="checkoutservice exhausted retry budget while acquiring a DB connection",
+                    summary="catalogservice exhausted retry budget while acquiring a DB connection",
                     value="12 retries exhausted in 5m",
                     excerpt="RetryPolicy exhausted for dependency postgres after 12 attempts in checkout workflow",
                     observed_at="2026-04-04T09:16:00Z",
@@ -79,15 +79,15 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                 EvidenceSeed(
                     id="metric.pg.error_rate",
                     kind="error_rate",
-                    summary="checkoutservice 5xx rate spiked sharply",
+                    summary="catalogservice 5xx rate spiked sharply",
                     value="5xx rate 0.81 req/s over 5m",
-                    excerpt="checkoutservice status=500 requests increased 9.4x from baseline",
+                    excerpt="catalogservice status=500 requests increased 9.4x from baseline",
                     observed_at="2026-04-04T09:17:00Z",
                 ),
                 EvidenceSeed(
                     id="metric.pg.latency",
                     kind="latency",
-                    summary="checkoutservice p95 latency regressed during database outage",
+                    summary="catalogservice p95 latency regressed during database outage",
                     value="p95 latency 4.2s over 5m",
                     excerpt="p95 request latency rose from 320ms to 4.2s while waiting on DB connection timeouts",
                     observed_at="2026-04-04T09:17:30Z",
@@ -117,18 +117,18 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                     kind="recent_change",
                     summary="No relevant deploy landed near incident start",
                     value="last deploy 3h earlier",
-                    excerpt="The last checkoutservice deploy completed three hours before the incident started.",
+                    excerpt="The last catalogservice deploy completed three hours before the incident started.",
                     observed_at="2026-04-04T09:14:00Z",
                 ),
             ],
         ),
         "redis_down": ScenarioDefinition(
             name="redis_down",
-            service="cartservice",
+            service="basketservice",
             topic="redis troubleshooting",
-            summary="cartservice is timing out because Redis is unavailable.",
+            summary="basketservice is timing out because Redis is unavailable.",
             expected_root_cause="Redis dependency outage",
-            secondary_hypothesis="Cartservice thread starvation caused by repeated Redis retry loops",
+            secondary_hypothesis="Basketservice thread starvation caused by repeated Redis retry loops",
             follow_up_checks=[
                 "Confirm Redis container or pod health and whether port 6379 is accepting connections.",
                 "Compare cache timeout traces with the first Redis connection errors.",
@@ -136,18 +136,18 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
             ],
             safe_actions=[
                 "Inspect Redis health, memory pressure, and restart history without modifying state.",
-                "Correlate cartservice timeout traces with Redis connection errors.",
-                "Validate cartservice latency and error-rate recovery after mitigation.",
+                "Correlate basketservice timeout traces with Redis connection errors.",
+                "Validate basketservice latency and error-rate recovery after mitigation.",
             ],
             approval_actions=[
                 "Restart or fail over Redis if it is confirmed down.",
-                "Repoint cartservice to a healthy cache endpoint if configuration drift is confirmed.",
+                "Repoint basketservice to a healthy cache endpoint if configuration drift is confirmed.",
             ],
             logs=[
                 EvidenceSeed(
                     id="log.redis.connection_refused",
                     kind="error_log",
-                    summary="cartservice failed to connect to Redis",
+                    summary="basketservice failed to connect to Redis",
                     value="18 connection-refused events in 3m",
                     excerpt="StackExchange.Redis.RedisConnectionException: No connection is active/available to service this operation",
                     observed_at="2026-04-04T10:05:00Z",
@@ -155,7 +155,7 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                 EvidenceSeed(
                     id="log.redis.timeout",
                     kind="error_log",
-                    summary="cartservice requests timed out while waiting for cache responses",
+                    summary="basketservice requests timed out while waiting for cache responses",
                     value="27 timeout logs in 5m",
                     excerpt="Timeout awaiting response from redis:6379 during cart lookup",
                     observed_at="2026-04-04T10:05:40Z",
@@ -165,15 +165,15 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                 EvidenceSeed(
                     id="metric.redis.error_rate",
                     kind="error_rate",
-                    summary="cartservice error-rate climbed sharply after Redis became unavailable",
+                    summary="basketservice error-rate climbed sharply after Redis became unavailable",
                     value="5xx rate 0.63 req/s over 5m",
-                    excerpt="cartservice status=500 requests increased 7.1x from baseline",
+                    excerpt="basketservice status=500 requests increased 7.1x from baseline",
                     observed_at="2026-04-04T10:06:00Z",
                 ),
                 EvidenceSeed(
                     id="metric.redis.latency",
                     kind="latency",
-                    summary="cartservice p95 latency regressed while waiting on cache timeouts",
+                    summary="basketservice p95 latency regressed while waiting on cache timeouts",
                     value="p95 latency 2.7s over 5m",
                     excerpt="p95 request latency rose from 180ms to 2.7s as cache calls stalled",
                     observed_at="2026-04-04T10:06:20Z",
@@ -203,7 +203,7 @@ def get_builtin_scenarios() -> dict[str, ScenarioDefinition]:
                     kind="recent_change",
                     summary="No recent deploy explains the cache outage",
                     value="last deploy 5h earlier",
-                    excerpt="The last cartservice deploy completed well before the cache failures started.",
+                    excerpt="The last basketservice deploy completed well before the cache failures started.",
                     observed_at="2026-04-04T10:04:00Z",
                 ),
             ],

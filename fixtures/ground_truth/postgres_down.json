@@ -3,25 +3,25 @@
   "expected_root_cause": "PostgreSQL dependency outage",
   "required_evidence": [
     {
-      "description": "Loki error logs were collected for checkoutservice",
+      "description": "Loki error logs were collected for catalogservice",
       "category": "logs",
       "source_type": "loki",
-      "query_contains": "service_name=\"checkoutservice\""
+      "query_contains": "service_name=\"catalogservice\""
     },
     {
-      "description": "Prometheus latency evidence was collected for checkoutservice",
+      "description": "Prometheus latency evidence was collected for catalogservice",
       "category": "metrics",
       "source_type": "prometheus",
       "query_contains": "histogram_quantile"
     },
     {
-      "description": "Prometheus 5xx evidence was collected for checkoutservice",
+      "description": "Prometheus 5xx evidence was collected for catalogservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "status=~\"5..\""
+      "query_contains": "http_response_status_code=~\"5..\""
     },
     {
-      "description": "Tempo failed-trace evidence was collected for checkoutservice",
+      "description": "Tempo failed-trace evidence was collected for catalogservice",
       "category": "traces",
       "source_type": "tempo",
       "query_contains": "status = error"

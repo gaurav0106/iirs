@@ -56,6 +56,7 @@ class Settings:
     runbooks_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "runbooks")
     fixtures_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "fixtures" / "alerts")
     ground_truth_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "fixtures" / "ground_truth")
+    live_signature_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "fixtures" / "live_signatures")
     prefer_langgraph: bool = field(default_factory=lambda: _env_flag("IIRS_PREFER_LANGGRAPH", True))
     telemetry_backend: str = field(default_factory=lambda: os.getenv("IIRS_TELEMETRY_BACKEND", "mock").strip().lower())
     allow_backend_fallback: bool = field(default_factory=lambda: _env_flag("IIRS_ALLOW_BACKEND_FALLBACK", False))

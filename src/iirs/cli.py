@@ -5,6 +5,11 @@ from pathlib import Path
 import sys
 
 from .evaluation import EvaluationHarness, render_evaluation_json, render_evaluation_markdown
+from .live_signatures import (
+    LiveSignatureHarness,
+    render_live_signature_json,
+    render_live_signature_markdown,
+)
 from .pipeline import IIRSPipeline
 from .present import render_brief_json, render_brief_markdown, render_trace_text
 
@@ -56,6 +61,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format for the evaluation report.",
     )
 
+    live_parser = subparsers.add_parser(
+        "verify-live",
+        help="Validate live telemetry signatures for built-in scenarios against the PLT backend.",
+    )
+    live_parser.add_argument(
+        "--scenario",
+        action="append",
+        choices=["postgres_down", "redis_down"],
+        help="Scenario to validate. Repeat to select multiple scenarios. Defaults to all live signature profiles.",
+    )
+    live_parser.add_argument(
+        "--started-at",
+        help="UTC timestamp to center the live validation window on. Defaults to now.",
+    )
+    live_parser.add_argument(
+        "--window-minutes",
+        type=int,
+        help="Override the alert time window in minutes. Defaults to the scenario fixture value.",
+    )
+    live_parser.add_argument(
+        "--format",
+        choices=["markdown", "json"],
+        default="markdown",
+        help="Output format for the live signature report.",
+    )
+
     return parser
 
 
@@ -97,6 +128,25 @@ def main(argv: list[str] | None = None) -> int:
             print(render_evaluation_json(report))
         else:
             print(render_evaluation_markdown(report))
+
+        return 0 if report.passed else 1
+
+    if args.command == "verify-live":
+        if args.window_minutes is not None and args.window_minutes < 1:
+            parser.error("--window-minutes must be at least 1.")
+
+        harness = LiveSignatureHarness.from_directory(pipeline, pipeline.settings.live_signature_dir)
+        scenario_names = args.scenario or sorted(harness.profiles)
+        report = harness.validate_scenarios(
+            scenario_names,
+            started_at=args.started_at,
+            window_minutes=args.window_minutes,
+        )
+
+        if args.format == "json":
+            print(render_live_signature_json(report))
+        else:
+            print(render_live_signature_markdown(report))
 
         return 0 if report.passed else 1
 

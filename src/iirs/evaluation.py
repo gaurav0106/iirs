@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 class EvidenceExpectation:
     description: str
     category: str
+    tool_name: str | None = None
     source_type: str | None = None
     query_contains: str | None = None
     text_contains: list[str] = field(default_factory=list)
@@ -25,6 +26,7 @@ class EvidenceExpectation:
         return cls(
             description=str(payload["description"]),
             category=str(payload["category"]),
+            tool_name=str(payload["tool_name"]) if payload.get("tool_name") else None,
             source_type=str(payload["source_type"]) if payload.get("source_type") else None,
             query_contains=str(payload["query_contains"]) if payload.get("query_contains") else None,
             text_contains=[str(item) for item in payload.get("text_contains", [])],

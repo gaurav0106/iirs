@@ -46,11 +46,15 @@ class QueryTemplates:
     def latency_metrics(self) -> str:
         return (
             "histogram_quantile(0.95, "
-            f'sum(rate(http_server_request_duration_seconds_bucket{{service="{self.service}"}}[5m])) by (le))'
+            f'sum(rate(http_server_request_duration_seconds_bucket{{service_name="{self.service}"}}[5m])) by (le))'
         )
 
     def error_rate_metrics(self) -> str:
-        return f'sum(rate(http_server_requests_total{{service="{self.service}",status=~"5.."}}[5m]))'
+        return (
+            "sum(rate("
+            f'http_server_request_duration_seconds_count{{service_name="{self.service}",http_response_status_code=~"5.."}}'
+            "[5m]))"
+        )
 
     def failed_traces(self) -> str:
         return f'{{ resource.service.name = "{self.service}" && status = error }} with (most_recent=true)'

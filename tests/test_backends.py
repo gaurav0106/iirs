@@ -18,10 +18,12 @@ from iirs.scenarios import build_alert_for_scenario, get_builtin_scenarios
 
 
 class QueryTemplateTests(unittest.TestCase):
-    def test_traceql_query_templates_are_scoped_to_service(self) -> None:
-        queries = QueryTemplates(service="checkoutservice")
+    def test_query_templates_are_scoped_to_service(self) -> None:
+        queries = QueryTemplates(service="catalogservice")
 
-        self.assertIn('resource.service.name = "checkoutservice"', queries.failed_traces())
+        self.assertIn('service_name="catalogservice"', queries.latency_metrics())
+        self.assertIn('http_response_status_code=~"5.."', queries.error_rate_metrics())
+        self.assertIn('resource.service.name = "catalogservice"', queries.failed_traces())
         self.assertIn("most_recent=true", queries.slow_traces())
 
 
@@ -48,7 +50,7 @@ class LiveBackendTests(unittest.TestCase):
                             "resultType": "matrix",
                             "result": [
                                 {
-                                    "metric": {"service": "checkoutservice"},
+                                    "metric": {"service_name": "catalogservice"},
                                     "values": [[1712222100, "4.2"]],
                                 }
                             ],
@@ -67,7 +69,7 @@ class LiveBackendTests(unittest.TestCase):
                             "resultType": "streams",
                             "result": [
                                 {
-                                    "stream": {"service_name": "checkoutservice"},
+                                    "stream": {"service_name": "catalogservice"},
                                     "values": [["1712222100000000000", "connection refused to postgres"]],
                                 }
                             ],
@@ -84,7 +86,7 @@ class LiveBackendTests(unittest.TestCase):
                         "traces": [
                             {
                                 "traceID": "abc123",
-                                "rootServiceName": "checkoutservice",
+                                "rootServiceName": "catalogservice",
                                 "rootTraceName": "POST /checkout",
                                 "startTimeUnixNano": "1712222100000000000",
                                 "durationMs": 4200,

@@ -3,25 +3,25 @@
   "expected_root_cause": "Redis dependency outage",
   "required_evidence": [
     {
-      "description": "Loki error logs were collected for cartservice",
+      "description": "Loki error logs were collected for basketservice",
       "category": "logs",
       "source_type": "loki",
-      "query_contains": "service_name=\"cartservice\""
+      "query_contains": "service_name=\"basketservice\""
     },
     {
-      "description": "Prometheus latency evidence was collected for cartservice",
+      "description": "Prometheus latency evidence was collected for basketservice",
       "category": "metrics",
       "source_type": "prometheus",
       "query_contains": "histogram_quantile"
     },
     {
-      "description": "Prometheus 5xx evidence was collected for cartservice",
+      "description": "Prometheus 5xx evidence was collected for basketservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "status=~\"5..\""
+      "query_contains": "http_response_status_code=~\"5..\""
     },
     {
-      "description": "Tempo failed-trace evidence was collected for cartservice",
+      "description": "Tempo failed-trace evidence was collected for basketservice",
       "category": "traces",
       "source_type": "tempo",
       "query_contains": "status = error"

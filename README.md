@@ -14,13 +14,13 @@ Implemented:
 - local observability stack assets and Aspire Shop bootstrap helpers
 - Docker-based PostgreSQL and Redis fault injection helpers
 - quantitative evaluation harness with ground-truth labels
+- automated live telemetry signature validation for the Aspire Shop fault scenarios
 - OpenAI-backed Analyst, Critic, and follow-up responses when a local key is present
 
 Still open:
 
 - Aspire Shop is still fetched from the upstream sample repo instead of being vendored here
 - Retriever and Planner are still deterministic
-- live telemetry signature checks are not automated yet
 - qualitative review scoring and final demo/report polish are not implemented yet
 
 ## Prerequisites
@@ -119,6 +119,22 @@ The evaluation harness checks:
 - required action-type and action-keyword coverage
 
 Ground-truth labels live in `fixtures/ground_truth/`.
+
+Run the live signature validator after reproducing a real local fault:
+
+```bash
+iirs verify-live --scenario postgres_down
+iirs verify-live --scenario redis_down
+```
+
+Useful variants:
+
+```bash
+iirs verify-live --started-at 2026-04-06T12:00:00Z --window-minutes 20
+iirs verify-live --format json
+```
+
+The live signature validator checks that the PLT backend can retrieve the expected Loki, Prometheus, and Tempo signals for the active fault window.
 
 ## Live local stack
 
@@ -239,6 +255,13 @@ Live-mode checks:
 - Retriever evidence IDs look like `log.live.*`, `metric.live.*`, or `trace.live.*`
 - citations point at `/api/v1/query_range`, `/loki/api/v1/query_range`, and `/api/search`
 
+Validate the live fault signatures directly:
+
+```bash
+iirs verify-live --scenario postgres_down
+iirs verify-live --scenario redis_down
+```
+
 ## Fault injection
 
 Use the helper:
@@ -291,7 +314,7 @@ bash tests/test_fault_injection.sh
 Run the test suite:
 
 ```bash
-python3 -m unittest discover -s tests
+./.venv/bin/python -m unittest discover -s tests
 ```
 
 Inspect trace artifacts:
