@@ -36,25 +36,83 @@ class TelemetryRequestError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class LiveMetricProfile:
+    route_matcher: str | None = None
+    route_operator: str = "="
+    exception_error_pattern: str | None = None
+
+    def base_selector_parts(self, service: str) -> list[str]:
+        parts = [f'exported_job="{service}"']
+        if self.route_matcher:
+            parts.append(f'http_route{self.route_operator}"{self.route_matcher}"')
+        return parts
+
+
+_DEFAULT_METRIC_PROFILE = LiveMetricProfile()
+_LIVE_METRIC_PROFILES: dict[tuple[str, str | None], LiveMetricProfile] = {
+    ("catalogservice", "postgres_down"): LiveMetricProfile(
+        route_matcher="/api/v1/catalog/items/type/all",
+        exception_error_pattern="Microsoft\\.EntityFrameworkCore\\.Storage\\.RetryLimitExceededException",
+    ),
+    ("basketservice", "redis_down"): LiveMetricProfile(
+        route_matcher="/BasketApi.Basket/(GetBasketById|UpdateBasket|CheckoutBasket|DeleteBasket)",
+        route_operator="=~",
+        exception_error_pattern="StackExchange\\.Redis\\..+",
+    ),
+}
+
+
+def _render_label_selector(parts: list[str]) -> str:
+    return ",".join(parts)
+
+
 @dataclass(slots=True)
 class QueryTemplates:
     service: str
+    scenario: str | None = None
 
     def error_logs(self) -> str:
         return f'{{service_name="{self.service}"}} |= "error"'
 
     def latency_metrics(self) -> str:
+        profile = self._metric_profile()
+        selector = _render_label_selector(profile.base_selector_parts(self.service))
+        group_labels = ["le", "exported_job"]
+        if profile.route_matcher:
+            group_labels.append("http_route")
         return (
             "histogram_quantile(0.95, "
-            f'sum(rate(http_server_request_duration_seconds_bucket{{service_name="{self.service}"}}[5m])) by (le))'
+            f"sum(rate(http_server_request_duration_seconds_bucket{{{selector}}}[5m])) "
+            f'by ({",".join(group_labels)}))'
         )
 
     def error_rate_metrics(self) -> str:
-        return (
+        profile = self._metric_profile()
+
+        request_selector_parts = profile.base_selector_parts(self.service)
+        request_selector_parts.append('http_response_status_code=~"499|5.."')
+        request_group_labels = ["exported_job", "http_response_status_code", "error_type"]
+        if profile.route_matcher:
+            request_group_labels.insert(1, "http_route")
+        request_query = (
             "sum(rate("
-            f'http_server_request_duration_seconds_count{{service_name="{self.service}",http_response_status_code=~"5.."}}'
-            "[5m]))"
+            f"http_server_request_duration_seconds_count{{{_render_label_selector(request_selector_parts)}}}[5m]"
+            ")) "
+            f'by ({",".join(request_group_labels)})'
         )
+
+        if not profile.exception_error_pattern:
+            return request_query
+
+        exception_query = (
+            "sum(rate("
+            f'aspnetcore_diagnostics_exceptions_total{{exported_job="{self.service}",'
+            f'error_type=~"{profile.exception_error_pattern}"}}[5m]'
+            ")) "
+            "by (exported_job,error_type)"
+        )
+        return f"{request_query} or {exception_query}"
 
     def failed_traces(self) -> str:
         return f'{{ resource.service.name = "{self.service}" && status = error }} with (most_recent=true)'
@@ -64,7 +122,13 @@ class QueryTemplates:
 
     @classmethod
     def for_alert(cls, alert: AlertPayload) -> "QueryTemplates":
-        return cls(service=alert.service)
+        return cls(service=alert.service, scenario=alert.scenario)
+
+    def _metric_profile(self) -> LiveMetricProfile:
+        return _LIVE_METRIC_PROFILES.get(
+            (self.service, self.scenario),
+            _LIVE_METRIC_PROFILES.get((self.service, None), _DEFAULT_METRIC_PROFILE),
+        )
 
 
 def _build_evidence(

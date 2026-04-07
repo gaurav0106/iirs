@@ -13,14 +13,20 @@
       "tool_name": "latency_metrics",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "histogram_quantile"
+      "query_contains": "http_route=\"/api/v1/catalog/items/type/all\"",
+      "text_contains": [
+        "/api/v1/catalog/items/type/all"
+      ]
     },
     {
-      "description": "Prometheus returned catalogservice 5xx evidence",
+      "description": "Prometheus returned catalogservice timeout or exception evidence",
       "tool_name": "error_rate_metrics",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "http_response_status_code=~\"5..\""
+      "query_contains": "http_response_status_code=~\"499|5..\"",
+      "text_contains": [
+        "RetryLimitExceededException"
+      ]
     },
     {
       "description": "Tempo returned failed catalogservice traces",

@@ -12,13 +12,13 @@
       "description": "Prometheus latency evidence was collected for basketservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "histogram_quantile"
+      "query_contains": "http_route=~\"/BasketApi.Basket/"
     },
     {
-      "description": "Prometheus 5xx evidence was collected for basketservice",
+      "description": "Prometheus exception evidence was collected for basketservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "http_response_status_code=~\"5..\""
+      "query_contains": "aspnetcore_diagnostics_exceptions_total"
     },
     {
       "description": "Tempo failed-trace evidence was collected for basketservice",

@@ -18,13 +18,22 @@ from iirs.scenarios import build_alert_for_scenario, get_builtin_scenarios
 
 
 class QueryTemplateTests(unittest.TestCase):
-    def test_query_templates_are_scoped_to_service(self) -> None:
-        queries = QueryTemplates(service="catalogservice")
+    def test_postgres_live_queries_use_exported_job_and_catalog_route(self) -> None:
+        queries = QueryTemplates(service="catalogservice", scenario="postgres_down")
 
-        self.assertIn('service_name="catalogservice"', queries.latency_metrics())
-        self.assertIn('http_response_status_code=~"5.."', queries.error_rate_metrics())
+        self.assertIn('exported_job="catalogservice"', queries.latency_metrics())
+        self.assertIn('http_route="/api/v1/catalog/items/type/all"', queries.latency_metrics())
+        self.assertIn('http_response_status_code=~"499|5.."', queries.error_rate_metrics())
+        self.assertIn("aspnetcore_diagnostics_exceptions_total", queries.error_rate_metrics())
         self.assertIn('resource.service.name = "catalogservice"', queries.failed_traces())
         self.assertIn("most_recent=true", queries.slow_traces())
+
+    def test_redis_live_queries_use_grpc_route_regex(self) -> None:
+        queries = QueryTemplates(service="basketservice", scenario="redis_down")
+
+        self.assertIn('exported_job="basketservice"', queries.latency_metrics())
+        self.assertIn('http_route=~"/BasketApi.Basket/', queries.latency_metrics())
+        self.assertIn("StackExchange\\.Redis\\..+", queries.error_rate_metrics())
 
 
 class LiveBackendTests(unittest.TestCase):
@@ -50,7 +59,10 @@ class LiveBackendTests(unittest.TestCase):
                             "resultType": "matrix",
                             "result": [
                                 {
-                                    "metric": {"service_name": "catalogservice"},
+                                    "metric": {
+                                        "exported_job": "catalogservice",
+                                        "http_route": "/api/v1/catalog/items/type/all",
+                                    },
                                     "values": [[1712222100, "4.2"]],
                                 }
                             ],

@@ -47,7 +47,10 @@ class LiveSignatureHarnessTests(unittest.TestCase):
                             "data": {
                                 "result": [
                                     {
-                                        "metric": {"service_name": "catalogservice"},
+                                        "metric": {
+                                            "exported_job": "catalogservice",
+                                            "http_route": "/api/v1/catalog/items/type/all",
+                                        },
                                         "values": [[1712222100, "1.8"]],
                                     }
                                 ]
@@ -61,7 +64,12 @@ class LiveSignatureHarnessTests(unittest.TestCase):
                         "data": {
                             "result": [
                                 {
-                                    "metric": {"service_name": "catalogservice", "http_response_status_code": "500"},
+                                    "metric": {
+                                        "exported_job": "catalogservice",
+                                        "http_response_status_code": "499",
+                                        "http_route": "/api/v1/catalog/items/type/all",
+                                        "error_type": "Microsoft.EntityFrameworkCore.Storage.RetryLimitExceededException",
+                                    },
                                     "values": [[1712222100, "0.7"]],
                                 }
                             ]

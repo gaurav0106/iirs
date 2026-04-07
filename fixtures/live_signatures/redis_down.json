@@ -13,14 +13,20 @@
       "tool_name": "latency_metrics",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "histogram_quantile"
+      "query_contains": "http_route=~\"/BasketApi.Basket/",
+      "text_contains": [
+        "BasketApi.Basket"
+      ]
     },
     {
-      "description": "Prometheus returned basketservice 5xx evidence",
+      "description": "Prometheus returned basketservice exception evidence",
       "tool_name": "error_rate_metrics",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "http_response_status_code=~\"5..\""
+      "query_contains": "aspnetcore_diagnostics_exceptions_total",
+      "text_contains": [
+        "StackExchange.Redis"
+      ]
     },
     {
       "description": "Tempo returned failed basketservice traces",

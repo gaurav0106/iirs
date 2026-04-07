@@ -12,13 +12,13 @@
       "description": "Prometheus latency evidence was collected for catalogservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "histogram_quantile"
+      "query_contains": "http_route=\"/api/v1/catalog/items/type/all\""
     },
     {
-      "description": "Prometheus 5xx evidence was collected for catalogservice",
+      "description": "Prometheus timeout or exception evidence was collected for catalogservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "http_response_status_code=~\"5..\""
+      "query_contains": "http_response_status_code=~\"499|5..\""
     },
     {
       "description": "Tempo failed-trace evidence was collected for catalogservice",
