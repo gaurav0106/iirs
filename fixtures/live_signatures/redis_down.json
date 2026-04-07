@@ -23,9 +23,9 @@
       "tool_name": "error_rate_metrics",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "aspnetcore_diagnostics_exceptions_total",
+      "query_contains": "dotnet_exceptions_total",
       "text_contains": [
-        "StackExchange.Redis"
+        "RedisConnectionException"
       ]
     },
     {

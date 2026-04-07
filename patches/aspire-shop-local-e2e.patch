@@ -1,0 +1,116 @@
+diff --git a/samples/aspire-shop/AspireShop.AppHost/AppHost.cs b/samples/aspire-shop/AspireShop.AppHost/AppHost.cs
+index b5e7727..b2a5f1a 100644
+--- a/samples/aspire-shop/AspireShop.AppHost/AppHost.cs
++++ b/samples/aspire-shop/AspireShop.AppHost/AppHost.cs
+@@ -1,4 +1,8 @@
+-﻿var builder = DistributedApplication.CreateBuilder(args);
++﻿using Aspire.Hosting.ApplicationModel;
++
++var builder = DistributedApplication.CreateBuilder(args);
++var iirsOtlpEndpoint = builder.Configuration["IIRS_OTLP_ENDPOINT"];
++var iirsOtlpProtocol = builder.Configuration["IIRS_OTLP_PROTOCOL"] ?? "grpc";
+ 
+ var postgres = builder.AddPostgres("postgres")
+     .WithPgAdmin()
+@@ -15,6 +19,7 @@ var catalogDb = postgres.AddDatabase("catalogdb");
+ var basketCache = builder.AddRedis("basketcache")
+     .WithDataVolume()
+     .WithRedisCommander();
++var basketCachePlaintext = basketCache.GetEndpoint("secondary");
+ 
+ var catalogDbManager = builder.AddProject<Projects.AspireShop_CatalogDbManager>("catalogdbmanager")
+     .WithReference(catalogDb)
+@@ -22,16 +27,44 @@ var catalogDbManager = builder.AddProject<Projects.AspireShop_CatalogDbManager>(
+     .WithHttpHealthCheck("/health")
+     .WithHttpCommand("/reset-db", "Reset Database", commandOptions: new() { IconName = "DatabaseLightning" });
+ 
++if (!string.IsNullOrWhiteSpace(iirsOtlpEndpoint))
++{
++    catalogDbManager
++        .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", iirsOtlpEndpoint)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_PROTOCOL", iirsOtlpProtocol)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_HEADERS", "");
++}
++
+ var catalogService = builder.AddProject<Projects.AspireShop_CatalogService>("catalogservice")
+     .WithReference(catalogDb)
+     .WaitFor(catalogDbManager)
+     .WithHttpHealthCheck("/health");
+ 
++if (!string.IsNullOrWhiteSpace(iirsOtlpEndpoint))
++{
++    catalogService
++        .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", iirsOtlpEndpoint)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_PROTOCOL", iirsOtlpProtocol)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_HEADERS", "");
++}
++
+ var basketService = builder.AddProject<Projects.AspireShop_BasketService>("basketservice")
+     .WithReference(basketCache)
++    // Local runs currently fail Redis TLS trust against the generated cert chain.
++    // Force the basket service onto the non-TLS endpoint so redis_down reflects the fault, not broken baseline wiring.
++    .WithEnvironment("ConnectionStrings__basketcache", $"{basketCachePlaintext.Property(EndpointProperty.HostAndPort)},password={basketCache.Resource.PasswordParameter!}")
++    .WithEnvironment("BASKETCACHE_URI", $"redis://:{basketCache.Resource.PasswordParameter!}@{basketCachePlaintext.Property(EndpointProperty.HostAndPort)}")
+     .WaitFor(basketCache);
+ 
+-builder.AddProject<Projects.AspireShop_Frontend>("frontend")
++if (!string.IsNullOrWhiteSpace(iirsOtlpEndpoint))
++{
++    basketService
++        .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", iirsOtlpEndpoint)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_PROTOCOL", iirsOtlpProtocol)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_HEADERS", "");
++}
++
++var frontend = builder.AddProject<Projects.AspireShop_Frontend>("frontend")
+     .WithExternalHttpEndpoints()
+     .WithUrlForEndpoint("https", url => url.DisplayText = "Online Store (HTTPS)")
+     .WithUrlForEndpoint("http", url => url.DisplayText = "Online Store (HTTP)")
+@@ -40,4 +73,12 @@ builder.AddProject<Projects.AspireShop_Frontend>("frontend")
+     .WithReference(catalogService)
+     .WaitFor(catalogService);
+ 
++if (!string.IsNullOrWhiteSpace(iirsOtlpEndpoint))
++{
++    frontend
++        .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", iirsOtlpEndpoint)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_PROTOCOL", iirsOtlpProtocol)
++        .WithEnvironment("OTEL_EXPORTER_OTLP_HEADERS", "");
++}
++
+ builder.Build().Run();
+diff --git a/samples/aspire-shop/AspireShop.Frontend/Program.cs b/samples/aspire-shop/AspireShop.Frontend/Program.cs
+index a0d640c..cfbbffc 100644
+--- a/samples/aspire-shop/AspireShop.Frontend/Program.cs
++++ b/samples/aspire-shop/AspireShop.Frontend/Program.cs
+@@ -9,12 +9,17 @@ builder.AddServiceDefaults();
+ 
+ builder.Services.AddHttpForwarderWithServiceDiscovery();
+ 
+-builder.Services.AddHttpServiceReference<CatalogServiceClient>("https+http://catalogservice", healthRelativePath: "health");
++// Default internal service calls to HTTP for local Aspire runs on Linux, where
++// dev-certificate trust across spawned resources is brittle. Set
++// IIRS_ASPIRE_INTERNAL_SCHEME=https to opt back into internal TLS.
++var internalServiceScheme = builder.Configuration["IIRS_ASPIRE_INTERNAL_SCHEME"] ?? "http";
++var catalogServiceReference = $"{internalServiceScheme}://catalogservice";
++var basketServiceReference = $"{internalServiceScheme}://basketservice";
+ 
+-var isHttps = builder.Configuration["DOTNET_LAUNCH_PROFILE"] == "https";
++builder.Services.AddHttpServiceReference<CatalogServiceClient>(catalogServiceReference, healthRelativePath: "health");
+ 
+ builder.Services.AddSingleton<BasketServiceClient>()
+-    .AddGrpcServiceReference<Basket.BasketClient>($"{(isHttps ? "https" : "http")}://basketservice", failureStatus: HealthStatus.Degraded);
++    .AddGrpcServiceReference<Basket.BasketClient>(basketServiceReference, failureStatus: HealthStatus.Degraded);
+ 
+ builder.Services.AddRazorComponents();
+ 
+@@ -33,7 +38,7 @@ app.UseStaticFiles();
+ 
+ app.MapRazorComponents<App>();
+ 
+-app.MapForwarder("/catalog/images/{id}", "https+http://catalogservice", "/api/v1/catalog/items/{id}/image");
++app.MapForwarder("/catalog/images/{id}", catalogServiceReference, "/api/v1/catalog/items/{id}/image");
+ 
+ app.MapDefaultEndpoints();
+ 
+ app.Run();

@@ -41,6 +41,8 @@ class LiveMetricProfile:
     route_matcher: str | None = None
     route_operator: str = "="
     exception_error_pattern: str | None = None
+    runtime_exception_pattern: str | None = None
+    failed_trace_filter: str | None = None
 
     def base_selector_parts(self, service: str) -> list[str]:
         parts = [f'exported_job="{service}"']
@@ -59,12 +61,18 @@ _LIVE_METRIC_PROFILES: dict[tuple[str, str | None], LiveMetricProfile] = {
         route_matcher="/BasketApi.Basket/(GetBasketById|UpdateBasket|CheckoutBasket|DeleteBasket)",
         route_operator="=~",
         exception_error_pattern="StackExchange\\.Redis\\..+",
+        runtime_exception_pattern="RedisConnectionException|RedisTimeoutException|SocketException",
+        failed_trace_filter='name =~ "POST /BasketApi.Basket/.*" && trace:duration > 4s',
     ),
 }
 
 
 def _render_label_selector(parts: list[str]) -> str:
     return ",".join(parts)
+
+
+def _escape_promql_regex(pattern: str) -> str:
+    return pattern.replace("\\", "\\\\").replace('"', '\\"')
 
 
 @dataclass(slots=True)
@@ -102,20 +110,34 @@ class QueryTemplates:
             f'by ({",".join(request_group_labels)})'
         )
 
-        if not profile.exception_error_pattern:
-            return request_query
+        exception_queries = [request_query]
 
-        exception_query = (
-            "sum(rate("
-            f'aspnetcore_diagnostics_exceptions_total{{exported_job="{self.service}",'
-            f'error_type=~"{profile.exception_error_pattern}"}}[5m]'
-            ")) "
-            "by (exported_job,error_type)"
-        )
-        return f"{request_query} or {exception_query}"
+        if profile.exception_error_pattern:
+            escaped_exception_pattern = _escape_promql_regex(profile.exception_error_pattern)
+            exception_queries.append(
+                "sum(rate("
+                f'aspnetcore_diagnostics_exceptions_total{{exported_job="{self.service}",'
+                f'error_type=~"{escaped_exception_pattern}"}}[5m]'
+                ")) "
+                "by (exported_job,error_type)"
+            )
+
+        if profile.runtime_exception_pattern:
+            escaped_runtime_pattern = _escape_promql_regex(profile.runtime_exception_pattern)
+            exception_queries.append(
+                "sum(rate("
+                f'dotnet_exceptions_total{{exported_job="{self.service}",'
+                f'error_type=~"{escaped_runtime_pattern}"}}[5m]'
+                ")) "
+                "by (exported_job,error_type)"
+            )
+
+        return " or ".join(exception_queries)
 
     def failed_traces(self) -> str:
-        return f'{{ resource.service.name = "{self.service}" && status = error }} with (most_recent=true)'
+        profile = self._metric_profile()
+        trace_filter = profile.failed_trace_filter or "status = error"
+        return f'{{ resource.service.name = "{self.service}" && {trace_filter} }} with (most_recent=true)'
 
     def slow_traces(self) -> str:
         return f'{{ resource.service.name = "{self.service}" && trace:duration > 1s }} with (most_recent=true)'
@@ -193,6 +215,14 @@ def _time_window(alert: AlertPayload) -> tuple[str, str]:
     center = _parse_datetime(alert.started_at)
     delta = timedelta(minutes=alert.window_minutes)
     return _format_datetime(center - delta), _format_datetime(center + delta)
+
+
+def _time_window_unix_seconds(alert: AlertPayload) -> tuple[str, str]:
+    center = _parse_datetime(alert.started_at)
+    delta = timedelta(minutes=alert.window_minutes)
+    start = int((center - delta).timestamp())
+    end = int((center + delta).timestamp())
+    return str(start), str(end)
 
 
 def _prometheus_step(alert: AlertPayload) -> str:
@@ -444,7 +474,7 @@ class PLTHttpTelemetryBackend:
         return payload.get("result", [])
 
     def _search_tempo(self, query: str, alert: AlertPayload) -> list[dict[str, Any]]:
-        start, end = _time_window(alert)
+        start, end = _time_window_unix_seconds(alert)
         payload = self._request(
             "tempo",
             f"{self.tempo_base_url}/api/search",

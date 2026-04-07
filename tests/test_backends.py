@@ -24,6 +24,10 @@ class QueryTemplateTests(unittest.TestCase):
         self.assertIn('exported_job="catalogservice"', queries.latency_metrics())
         self.assertIn('http_route="/api/v1/catalog/items/type/all"', queries.latency_metrics())
         self.assertIn('http_response_status_code=~"499|5.."', queries.error_rate_metrics())
+        self.assertIn(
+            'Microsoft\\\\.EntityFrameworkCore\\\\.Storage\\\\.RetryLimitExceededException',
+            queries.error_rate_metrics(),
+        )
         self.assertIn("aspnetcore_diagnostics_exceptions_total", queries.error_rate_metrics())
         self.assertIn('resource.service.name = "catalogservice"', queries.failed_traces())
         self.assertIn("most_recent=true", queries.slow_traces())
@@ -33,7 +37,11 @@ class QueryTemplateTests(unittest.TestCase):
 
         self.assertIn('exported_job="basketservice"', queries.latency_metrics())
         self.assertIn('http_route=~"/BasketApi.Basket/', queries.latency_metrics())
-        self.assertIn("StackExchange\\.Redis\\..+", queries.error_rate_metrics())
+        self.assertIn("StackExchange\\\\.Redis\\\\..+", queries.error_rate_metrics())
+        self.assertIn("dotnet_exceptions_total", queries.error_rate_metrics())
+        self.assertIn("RedisConnectionException|RedisTimeoutException|SocketException", queries.error_rate_metrics())
+        self.assertIn('name =~ "POST /BasketApi.Basket/.*"', queries.failed_traces())
+        self.assertIn("trace:duration > 4s", queries.failed_traces())
 
 
 class LiveBackendTests(unittest.TestCase):
@@ -92,6 +100,8 @@ class LiveBackendTests(unittest.TestCase):
             if request.url.host == "tempo.test":
                 self.assertEqual(request.url.path, "/api/search")
                 self.assertIn("q", params)
+                self.assertTrue(params["start"][0].isdigit())
+                self.assertTrue(params["end"][0].isdigit())
                 return httpx.Response(
                     200,
                     json={

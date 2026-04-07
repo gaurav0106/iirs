@@ -18,13 +18,13 @@
       "description": "Prometheus exception evidence was collected for basketservice",
       "category": "metrics",
       "source_type": "prometheus",
-      "query_contains": "aspnetcore_diagnostics_exceptions_total"
+      "query_contains": "dotnet_exceptions_total"
     },
     {
       "description": "Tempo failed-trace evidence was collected for basketservice",
       "category": "traces",
       "source_type": "tempo",
-      "query_contains": "status = error"
+      "query_contains": "name =~ \"POST /BasketApi.Basket/.*\""
     },
     {
       "description": "Redis runbook guidance was included",
