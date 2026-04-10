@@ -565,7 +565,12 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
 def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def planner(state: IIRSState) -> dict[str, object]:
         scenario = context.scenarios[state["scenario_name"]]
-        steps, brief = _deterministic_plan(state, scenario)
+        fallback_reason: str | None = None
+        try:
+            steps, brief = _llm_plan(context, state, scenario)
+        except OpenAIRequestError as exc:
+            steps, brief = _deterministic_plan(state, scenario)
+            fallback_reason = f"Fell back to deterministic planning after OpenAI error: {exc}"
 
         agent_run = AgentRun(
             agent_name="Planner",
@@ -574,6 +579,7 @@ def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
             input_summary="Synthesized hypotheses and critique into an incident brief.",
             output_summary=(
                 f"Produced {len(steps)} triage actions and the final brief '{brief.title}'."
+                + (f" {fallback_reason}" if fallback_reason else "")
             ),
         )
 
@@ -584,7 +590,11 @@ def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
             "messages": _append_message(
                 state,
                 "assistant",
-                f"Planner generated the incident brief with {len(steps)} actions.",
+                (
+                    f"Planner generated the incident brief with {len(steps)} actions."
+                    if fallback_reason is None
+                    else "Planner fell back to deterministic planning after an OpenAI timeout or API error."
+                ),
             ),
         }
 
@@ -595,8 +605,12 @@ def answer_follow_up(question: str, state: IIRSState, llm: ReasoningClient | Non
     if llm is not None:
         try:
             return llm.answer_follow_up(question, state)
-        except OpenAIRequestError:
-            pass
+        except OpenAIRequestError as exc:
+            fallback_prefix = f"OpenAI follow-up failed, using deterministic fallback: {exc}\n\n"
+        else:
+            fallback_prefix = ""
+    else:
+        fallback_prefix = ""
 
     bundle = state["evidence_bundle"]
     brief = state["incident_brief"]
@@ -609,7 +623,7 @@ def answer_follow_up(question: str, state: IIRSState, llm: ReasoningClient | Non
         for evidence_id in top.supporting_evidence_ids[:3]:
             item = evidence_lookup[evidence_id]
             evidence_lines.append(f"- {item.summary} ({item.citations[0].source_type}: {item.citations[0].source})")
-        return (
+        return fallback_prefix + (
             f"Most likely root cause: {top.title} (confidence {top.confidence:.2f}).\n"
             f"Supporting evidence:\n" + "\n".join(evidence_lines)
         )
@@ -621,16 +635,16 @@ def answer_follow_up(question: str, state: IIRSState, llm: ReasoningClient | Non
             lines.append(
                 f"- {item.id}: {item.summary} | {citation.source_type} | query `{citation.query}`"
             )
-        return "Top cited evidence:\n" + "\n".join(lines)
+        return fallback_prefix + "Top cited evidence:\n" + "\n".join(lines)
 
     if "action" in lowered or "next" in lowered or "plan" in lowered:
         lines = [
             f"- [{step.action_type}] {step.description}"
             for step in brief.recommended_actions
         ]
-        return "Recommended next steps:\n" + "\n".join(lines)
+        return fallback_prefix + "Recommended next steps:\n" + "\n".join(lines)
 
-    return (
+    return fallback_prefix + (
         f"{brief.summary}\n"
         f"Open questions: {', '.join(brief.open_questions)}\n"
         "Ask about root cause, evidence, or next actions for a more specific answer."

@@ -102,6 +102,13 @@ class EvidenceCheckResult:
 
 
 @dataclass(slots=True)
+class QualitativeCheckResult:
+    description: str
+    passed: bool
+    detail: str
+
+
+@dataclass(slots=True)
 class ScenarioRunEvaluation:
     scenario_name: str
     expected_root_cause: str
@@ -112,6 +119,7 @@ class ScenarioRunEvaluation:
     top1_correct: bool
     top3_correct: bool
     evidence_checks: list[EvidenceCheckResult] = field(default_factory=list)
+    qualitative_checks: list[QualitativeCheckResult] = field(default_factory=list)
     matched_action_keywords: list[str] = field(default_factory=list)
     missing_action_keywords: list[str] = field(default_factory=list)
     missing_action_types: list[str] = field(default_factory=list)
@@ -119,6 +127,20 @@ class ScenarioRunEvaluation:
     @property
     def missing_evidence_descriptions(self) -> list[str]:
         return [check.description for check in self.evidence_checks if not check.satisfied]
+
+    @property
+    def qualitative_passed_count(self) -> int:
+        return sum(check.passed for check in self.qualitative_checks)
+
+    @property
+    def qualitative_total(self) -> int:
+        return len(self.qualitative_checks)
+
+    @property
+    def qualitative_score(self) -> float:
+        if not self.qualitative_checks:
+            return 0.0
+        return self.qualitative_passed_count / self.qualitative_total
 
     @property
     def passed(self) -> bool:
@@ -149,6 +171,14 @@ class ScenarioEvaluationReport:
     def passed_runs(self) -> int:
         return sum(run.passed for run in self.runs)
 
+    @property
+    def qualitative_checks_total(self) -> int:
+        return sum(run.qualitative_total for run in self.runs)
+
+    @property
+    def qualitative_checks_passed(self) -> int:
+        return sum(run.qualitative_passed_count for run in self.runs)
+
 
 @dataclass(slots=True)
 class EvaluationReport:
@@ -171,6 +201,20 @@ class EvaluationReport:
     @property
     def passed_runs(self) -> int:
         return sum(report.passed_runs for report in self.scenario_reports)
+
+    @property
+    def qualitative_checks_total(self) -> int:
+        return sum(report.qualitative_checks_total for report in self.scenario_reports)
+
+    @property
+    def qualitative_checks_passed(self) -> int:
+        return sum(report.qualitative_checks_passed for report in self.scenario_reports)
+
+    @property
+    def qualitative_score(self) -> float:
+        if self.qualitative_checks_total == 0:
+            return 0.0
+        return self.qualitative_checks_passed / self.qualitative_checks_total
 
     @property
     def top1_accuracy(self) -> float:
@@ -202,6 +246,7 @@ def load_ground_truth_labels(directory: Path) -> dict[str, GroundTruthLabel]:
 def evaluate_state(state: IIRSState, label: GroundTruthLabel, run_number: int) -> ScenarioRunEvaluation:
     brief = state["incident_brief"]
     bundle = state["evidence_bundle"]
+    critique = state["critique"]
     top_titles = [hypothesis.title for hypothesis in brief.probable_root_causes]
     top1_correct = bool(top_titles) and label.matches_root_cause(top_titles[0])
     top3_correct = any(label.matches_root_cause(title) for title in top_titles[:3])
@@ -235,6 +280,75 @@ def evaluate_state(state: IIRSState, label: GroundTruthLabel, run_number: int) -
         if action_type not in action_types
     ]
 
+    evidence_lookup = bundle.by_id()
+    top_support_ids = brief.probable_root_causes[0].supporting_evidence_ids if brief.probable_root_causes else []
+    top_support_items = [
+        evidence_lookup[evidence_id]
+        for evidence_id in top_support_ids
+        if evidence_id in evidence_lookup
+    ]
+    top_source_types = {
+        citation.source_type.lower()
+        for item in top_support_items
+        for citation in item.citations
+    }
+    critic_caught_risk = any(
+        finding.severity in {"warning", "critical"}
+        for finding in critique.findings
+    ) or bool(critique.hallucination_risks) or bool(critique.missing_data)
+    safety_boundary_explicit = any(
+        "approval" in note.lower() or "needs-approval" in note.lower()
+        for note in critique.safety_notes
+    ) or any(step.action_type == "needs-approval" for step in brief.recommended_actions)
+    plan_steps_have_evidence = all(step.evidence_ids for step in brief.recommended_actions)
+    open_questions_cover_data_gaps = (
+        not critique.missing_data
+        or all(question in brief.open_questions for question in critique.missing_data)
+    )
+
+    qualitative_checks = [
+        QualitativeCheckResult(
+            description="Top hypothesis cites at least three evidence items",
+            passed=len(top_support_items) >= 3,
+            detail=f"{len(top_support_items)} cited evidence items on the top hypothesis.",
+        ),
+        QualitativeCheckResult(
+            description="Top hypothesis evidence spans at least three source types",
+            passed=len(top_source_types) >= 3,
+            detail=f"Source types on top hypothesis: {', '.join(sorted(top_source_types)) or 'none'}.",
+        ),
+        QualitativeCheckResult(
+            description="Critic catches at least one material caveat or risk",
+            passed=critic_caught_risk,
+            detail=(
+                f"Findings={len(critique.findings)}, hallucination_risks={len(critique.hallucination_risks)}, "
+                f"missing_data={len(critique.missing_data)}."
+            ),
+        ),
+        QualitativeCheckResult(
+            description="Safety boundary between read-only and approval-required actions is explicit",
+            passed=safety_boundary_explicit,
+            detail=(
+                f"Safety notes={len(critique.safety_notes)}, "
+                f"needs-approval actions={sum(step.action_type == 'needs-approval' for step in brief.recommended_actions)}."
+            ),
+        ),
+        QualitativeCheckResult(
+            description="Every recommended action is grounded in cited evidence",
+            passed=plan_steps_have_evidence,
+            detail=f"{sum(bool(step.evidence_ids) for step in brief.recommended_actions)}/{len(brief.recommended_actions)} actions cite evidence.",
+        ),
+        QualitativeCheckResult(
+            description="Open questions preserve the critic's unresolved data gaps",
+            passed=open_questions_cover_data_gaps,
+            detail=(
+                "Critic missing_data propagated into brief open questions."
+                if open_questions_cover_data_gaps
+                else "Some critic missing_data items were dropped from brief open questions."
+            ),
+        ),
+    ]
+
     return ScenarioRunEvaluation(
         scenario_name=label.scenario_name,
         expected_root_cause=label.expected_root_cause,
@@ -245,6 +359,7 @@ def evaluate_state(state: IIRSState, label: GroundTruthLabel, run_number: int) -
         top1_correct=top1_correct,
         top3_correct=top3_correct,
         evidence_checks=evidence_checks,
+        qualitative_checks=qualitative_checks,
         matched_action_keywords=matched_action_keywords,
         missing_action_keywords=missing_action_keywords,
         missing_action_types=missing_action_types,
@@ -304,6 +419,10 @@ def render_evaluation_markdown(report: EvaluationReport) -> str:
         f"- Top-1 accuracy: `{report.top1_hits}/{report.total_runs}` ({report.top1_accuracy:.0%})",
         f"- Top-3 accuracy: `{report.top3_hits}/{report.total_runs}` ({report.top3_accuracy:.0%})",
         f"- Fully passing runs: `{report.passed_runs}/{report.total_runs}`",
+        (
+            f"- Qualitative review score: `{report.qualitative_checks_passed}/{report.qualitative_checks_total}` "
+            f"({report.qualitative_score:.0%})"
+        ),
     ]
 
     for scenario_report in report.scenario_reports:
@@ -319,7 +438,8 @@ def render_evaluation_markdown(report: EvaluationReport) -> str:
                 f"- Run {run.run_number}: "
                 f"{'PASS' if run.passed else 'FAIL'} | "
                 f"top1=`{run.top_titles[0] if run.top_titles else 'n/a'}` | "
-                f"trace=`{run.trace_path}`"
+                f"trace=`{run.trace_path}` | "
+                f"qualitative=`{run.qualitative_passed_count}/{run.qualitative_total}`"
             )
             if run.missing_evidence_descriptions:
                 lines.append("  Missing evidence checks: " + "; ".join(run.missing_evidence_descriptions))
@@ -327,6 +447,12 @@ def render_evaluation_markdown(report: EvaluationReport) -> str:
                 lines.append("  Missing action keywords: " + "; ".join(run.missing_action_keywords))
             if run.missing_action_types:
                 lines.append("  Missing action types: " + ", ".join(run.missing_action_types))
+            failed_qualitative_checks = [check for check in run.qualitative_checks if not check.passed]
+            if failed_qualitative_checks:
+                lines.append(
+                    "  Qualitative review gaps: "
+                    + "; ".join(f"{check.description} ({check.detail})" for check in failed_qualitative_checks)
+                )
 
     return "\n".join(lines)
 
@@ -341,6 +467,9 @@ def render_evaluation_json(report: EvaluationReport) -> str:
         "passed_runs": report.passed_runs,
         "top1_accuracy": report.top1_accuracy,
         "top3_accuracy": report.top3_accuracy,
+        "qualitative_checks_total": report.qualitative_checks_total,
+        "qualitative_checks_passed": report.qualitative_checks_passed,
+        "qualitative_score": report.qualitative_score,
         "passed": report.passed,
         "scenario_reports": report.scenario_reports,
     }

@@ -16,16 +16,16 @@ This repository started with only the capstone proposal PDF. The current slice i
 10. Helper scripts and docs for bootstrapping the upstream Aspire Shop sample against that stack.
 11. Automated PostgreSQL and Redis fault-injection helpers for the Aspire Shop demo.
 12. Ground-truth labels plus a quantitative evaluation harness for Top-1 and Top-3 scoring.
-13. OpenAI-backed Analyst, Critic, and follow-up responses with local-only key loading.
-14. Live telemetry signature validation for the Aspire Shop PostgreSQL and Redis fault scenarios.
+13. Qualitative review scoring for evidence grounding, critic caution, and plan traceability.
+14. OpenAI-backed Analyst, Critic, Planner, and follow-up responses with local-only key loading.
+15. Live telemetry signature validation for the Aspire Shop PostgreSQL and Redis fault scenarios.
 
 ## Still open from the issue
 
 1. Aspire Shop is still fetched from the upstream sample repository rather than being vendored or fully automated as part of this repo.
-2. Retriever and Planner remain deterministic; only Analyst, Critic, and follow-up answers use OpenAI today.
-3. Qualitative evaluation workflows for evidence quality and Critic catch rate are not implemented yet.
-4. Demo automation, Codespaces, and the final report remain open.
+2. Retriever remains deterministic; Analyst, Critic, Planner, and follow-up answers can use OpenAI when enabled.
+3. Demo automation, Codespaces, and the final report remain open.
 
 ## Recommended next step
 
-The next practical milestone is adding qualitative review scoring so the end-to-end demo is validated for evidence quality and critic performance, not just signal presence and root-cause accuracy.
+The next practical milestone is packaging the submission artifacts and live demo path so the multi-agent system is easy to evaluate without extra setup improvisation.

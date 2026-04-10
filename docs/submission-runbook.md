@@ -15,7 +15,7 @@ The safest default is to submit a zip that works without an OpenAI key. The Open
 There are two separate flows in this repo:
 
 - `iirs verify-live`: checks whether Loki, Prometheus, and Tempo expose the expected live fault signals. This validates telemetry collection and live query correctness. It does not use the LLM reasoning path.
-- `iirs run`: runs the `Retriever -> Analyst -> Critic -> Planner` pipeline. This is the actual incident-analysis flow. The Retriever is deterministic. Analyst, Critic, and follow-up answers can use OpenAI when enabled.
+- `iirs run`: runs the `Retriever -> Analyst -> Critic -> Planner` pipeline. This is the actual incident-analysis flow. The Retriever is deterministic. Analyst, Critic, Planner, and follow-up answers can use OpenAI when enabled.
 
 Recommended order:
 
@@ -47,7 +47,13 @@ That patch does two important things:
 - forwards Aspire Shop telemetry to the local OTLP collector
 - forces local basket service calls to use the plaintext Redis endpoint so `redis_down` is a real induced fault instead of a broken baseline
 
-If you build the final zip from your working tree, include `.external/aspire-samples/` so the patched sample is present in the submission.
+If you build the final zip from your working tree, include the patched `.external/aspire-samples/samples/aspire-shop/` tree so the live demo sample is present without dragging the entire upstream repository into the submission.
+
+The fastest packaging path after generating the proof artifacts is:
+
+```bash
+./scripts/build_submission_zip.sh
+```
 
 ## One-Time Setup
 
@@ -80,6 +86,16 @@ These commands produce simple artifacts that are useful to include in the zip.
 ./.venv/bin/iirs run --scenario postgres_down --show-trace | tee submission_artifacts/mock_postgres.txt
 ./.venv/bin/iirs run --scenario redis_down --show-trace | tee submission_artifacts/mock_redis.txt
 ```
+
+The evaluation output now includes both quantitative accuracy and a qualitative review score for evidence grounding, critic caution, and action-plan traceability.
+
+If the live rehearsal reproduces the fault but one telemetry check stays flaky, the best fallback is to show the saved live rehearsal output and then switch immediately to:
+
+```bash
+IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario postgres_down --show-trace
+```
+
+That preserves the multi-agent demo even when the live environment is being annoying.
 
 ## Start The Live Stack
 

@@ -42,6 +42,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report.total_runs, 4)
         self.assertEqual(report.top1_accuracy, 1.0)
         self.assertEqual(report.top3_accuracy, 1.0)
+        self.assertGreater(report.qualitative_score, 0.0)
         self.assertTrue(report.passed)
 
         postgres_report = next(
@@ -53,6 +54,10 @@ class EvaluationTests(unittest.TestCase):
         self.assertFalse(postgres_report.runs[0].missing_evidence_descriptions)
         self.assertFalse(postgres_report.runs[0].missing_action_keywords)
         self.assertFalse(postgres_report.runs[0].missing_action_types)
+        self.assertEqual(
+            postgres_report.runs[0].qualitative_passed_count,
+            postgres_report.runs[0].qualitative_total,
+        )
 
     def test_markdown_renderer_includes_accuracy_summary(self) -> None:
         harness = EvaluationHarness.from_directory(self.pipeline, self.settings.ground_truth_dir)
@@ -62,6 +67,7 @@ class EvaluationTests(unittest.TestCase):
 
         self.assertIn("# IIRS Evaluation", rendered)
         self.assertIn("Top-1 accuracy", rendered)
+        self.assertIn("Qualitative review score", rendered)
         self.assertIn("postgres_down", rendered)
 
 

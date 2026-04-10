@@ -335,15 +335,27 @@ class OpenAIResponsesReasoner:
         user_prompt: str,
         max_output_tokens: int,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "input": self._build_input(system_prompt, user_prompt),
-            "max_output_tokens": max_output_tokens,
-        }
-        if self._supports_reasoning():
-            payload["reasoning"] = {"effort": self.reasoning_effort}
-        data = self._post_responses(payload)
-        return self._extract_output_text(data).strip()
+        effort = self.reasoning_effort
+        output_limit = max_output_tokens
+        for attempt in range(2):
+            payload: dict[str, Any] = {
+                "model": self.model,
+                "input": self._build_input(system_prompt, user_prompt),
+                "max_output_tokens": output_limit,
+                "text": {"verbosity": "low"},
+            }
+            if self._supports_reasoning():
+                payload["reasoning"] = {"effort": effort}
+            data = self._post_responses(payload)
+            try:
+                return self._extract_output_text(data).strip()
+            except OpenAIRequestError:
+                if attempt == 0 and self._should_retry_for_output(data):
+                    output_limit = max(max_output_tokens * 2, 1000)
+                    effort = self._fallback_reasoning_effort(effort)
+                    continue
+                raise
+        raise OpenAIRequestError("OpenAI response retry logic exhausted without producing text output.")
 
     def _build_input(self, system_prompt: str, user_prompt: str) -> list[dict[str, Any]]:
         return [

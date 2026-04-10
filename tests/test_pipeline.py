@@ -49,6 +49,21 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("PostgreSQL dependency outage", answer)
         self.assertIn("Supporting evidence", answer)
 
+    def test_build_initial_state_and_finalize_state_support_stepwise_runs(self) -> None:
+        alert = self.pipeline.build_alert_for_scenario("postgres_down")
+        state = self.pipeline.build_initial_state(alert)
+
+        self.assertEqual(state["alert"].incident_id, alert.incident_id)
+        self.assertEqual(len(state["messages"]), 1)
+        self.assertEqual([name for name, _ in self.pipeline.named_nodes], ["Retriever", "Analyst", "Critic", "Planner"])
+
+        for _, node in self.pipeline.named_nodes:
+            state.update(node(state))
+
+        finalized = self.pipeline.finalize_state(state)
+        self.assertEqual(finalized["incident_brief"].probable_root_causes[0].title, "PostgreSQL dependency outage")
+        self.assertTrue(Path(finalized["trace_path"]).exists())
+
 
 if __name__ == "__main__":
     unittest.main()

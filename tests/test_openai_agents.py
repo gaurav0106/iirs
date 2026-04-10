@@ -87,6 +87,16 @@ class FailingCriticReasoningClient(FakeReasoningClient):
         raise OpenAIRequestError("The read operation timed out")
 
 
+class FailingPlannerReasoningClient(FakeReasoningClient):
+    def plan_incident(self, state):
+        raise OpenAIRequestError("The read operation timed out")
+
+
+class FailingFollowUpReasoningClient(FakeReasoningClient):
+    def answer_follow_up(self, question, state):
+        raise OpenAIRequestError("The read operation timed out")
+
+
 class OpenAIAgentIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.trace_dir = ROOT / "traces" / "openai-agent-output"
@@ -106,6 +116,8 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
         state = pipeline.run_scenario("postgres_down")
 
         self.assertEqual(state["incident_brief"].probable_root_causes[0].title, "PostgreSQL dependency outage")
+        self.assertEqual(state["incident_brief"].title, "Incident Brief: postgres_down")
+        self.assertEqual(state["incident_brief"].open_questions, ["Is PostgreSQL healthy at the container layer?"])
         self.assertEqual(state["incident_brief"].recommended_actions[0].action_type, "auto-safe")
         self.assertTrue(any(step.action_type == "needs-approval" for step in state["incident_brief"].recommended_actions))
         self.assertIn("PostgreSQL", state["incident_brief"].summary)
@@ -134,6 +146,25 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
         critic_trace = next(run for run in state["trace_runs"] if run.agent_name == "Critic")
         self.assertIn("Fell back to deterministic critique", critic_trace.output_summary)
         follow_up = pipeline.follow_up("What is the root cause?", state)
+        self.assertIn("Most likely root cause", follow_up)
+
+    def test_pipeline_falls_back_when_planner_times_out(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingPlannerReasoningClient())
+
+        state = pipeline.run_scenario("postgres_down")
+
+        planner_trace = next(run for run in state["trace_runs"] if run.agent_name == "Planner")
+        self.assertIn("Fell back to deterministic planning", planner_trace.output_summary)
+        self.assertEqual(state["incident_brief"].title, "Incident Brief: postgres_down")
+        self.assertTrue(any(step.action_type == "needs-approval" for step in state["incident_brief"].recommended_actions))
+
+    def test_follow_up_fallback_mentions_model_failure(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingFollowUpReasoningClient())
+
+        state = pipeline.run_scenario("postgres_down")
+        follow_up = pipeline.follow_up("What is the root cause?", state)
+
+        self.assertIn("OpenAI follow-up failed", follow_up)
         self.assertIn("Most likely root cause", follow_up)
 
 

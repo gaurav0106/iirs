@@ -14,14 +14,15 @@ Implemented:
 - local observability stack assets and Aspire Shop bootstrap helpers
 - Docker-based PostgreSQL and Redis fault injection helpers
 - quantitative evaluation harness with ground-truth labels
+- qualitative review scoring for evidence grounding, critic caution, and plan traceability
 - automated live telemetry signature validation for the Aspire Shop fault scenarios
-- OpenAI-backed Analyst, Critic, and follow-up responses when a local key is present
+- OpenAI-backed Analyst, Critic, Planner, and follow-up responses when a local key is present
 
 Still open:
 
 - Aspire Shop is still fetched from the upstream sample repo instead of being vendored here
-- Retriever and Planner are still deterministic
-- qualitative review scoring and final demo/report polish are not implemented yet
+- Retriever remains deterministic
+- final demo/report polish is not implemented yet
 
 ## Prerequisites
 
@@ -56,9 +57,9 @@ IIRS_EMBEDDING_MODEL=text-embedding-3-small
 Notes:
 
 - `gpt-5-mini` is the best default from the currently supported models for this project
-- if a key is present, Analyst, Critic, and follow-up answers use OpenAI automatically
+- if a key is present, Analyst, Critic, Planner, and follow-up answers use OpenAI automatically
 - set `IIRS_USE_OPENAI_AGENTS=false` to force deterministic behavior
-- Retriever and Planner remain deterministic today
+- Retriever remains deterministic today
 
 ## Fastest path: mock end-to-end
 
@@ -117,6 +118,7 @@ The evaluation harness checks:
 - Top-3 root-cause accuracy
 - required evidence-source coverage
 - required action-type and action-keyword coverage
+- qualitative review score for evidence grounding, critic caution, and plan safety/traceability
 
 Ground-truth labels live in `fixtures/ground_truth/`.
 

@@ -46,7 +46,16 @@ class IIRSPipeline:
             scenarios=self.scenarios,
             llm=reasoning_client if reasoning_client is not None else build_reasoning_client(self.settings),
         )
+        self.named_nodes = self._build_nodes()
         self.runner, self.used_langgraph = self._build_runner()
+
+    def _build_nodes(self) -> list[tuple[str, Callable[[IIRSState], dict[str, object]]]]:
+        return [
+            ("Retriever", make_retriever_node(self.context)),
+            ("Analyst", make_analyst_node(self.context)),
+            ("Critic", make_critic_node(self.context)),
+            ("Planner", make_planner_node(self.context)),
+        ]
 
     def _build_runner(self) -> tuple[object, bool]:
         nodes = [
@@ -83,8 +92,8 @@ class IIRSPipeline:
     def parse_alert_json(self, payload: str) -> AlertPayload:
         return AlertPayload.from_mapping(json.loads(payload))
 
-    def run(self, alert: AlertPayload) -> IIRSState:
-        initial_state: IIRSState = {
+    def build_initial_state(self, alert: AlertPayload) -> IIRSState:
+        return {
             "alert": alert,
             "messages": [
                 ConversationTurn(
@@ -95,10 +104,17 @@ class IIRSPipeline:
             ],
             "trace_runs": [],
         }
+
+    def finalize_state(self, state: IIRSState) -> IIRSState:
+        current = dict(state)
+        trace_path = self._write_trace(current)
+        current["trace_path"] = str(trace_path)
+        return current
+
+    def run(self, alert: AlertPayload) -> IIRSState:
+        initial_state = self.build_initial_state(alert)
         state = self.runner.invoke(initial_state)
-        trace_path = self._write_trace(state)
-        state["trace_path"] = str(trace_path)
-        return state
+        return self.finalize_state(state)
 
     def run_scenario(self, scenario_name: str) -> IIRSState:
         return self.run(self.build_alert_for_scenario(scenario_name))
