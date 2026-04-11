@@ -78,12 +78,20 @@ class FakeReasoningClient:
     def answer_follow_up(self, question, state):
         return f"model-follow-up:{question}"
 
+    def check_connection(self):
+        return "READY gpt-5-mini"
+
 
 class FailingCriticReasoningClient(FakeReasoningClient):
     def critique_incident(self, state):
         raise OpenAIRequestError("The read operation timed out")
 
     def answer_follow_up(self, question, state):
+        raise OpenAIRequestError("The read operation timed out")
+
+
+class FailingAnalystReasoningClient(FakeReasoningClient):
+    def analyze_incident(self, state):
         raise OpenAIRequestError("The read operation timed out")
 
 
@@ -121,6 +129,7 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
         self.assertEqual(state["incident_brief"].recommended_actions[0].action_type, "auto-safe")
         self.assertTrue(any(step.action_type == "needs-approval" for step in state["incident_brief"].recommended_actions))
         self.assertIn("PostgreSQL", state["incident_brief"].summary)
+        self.assertEqual([run.execution_mode for run in state["trace_runs"]], ["tooling", "model", "model", "model"])
         self.assertEqual(pipeline.follow_up("What changed?", state), "model-follow-up:What changed?")
 
     def test_build_reasoning_client_requires_key_when_enabled(self) -> None:
@@ -137,35 +146,57 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
         with self.assertRaises(OpenAIConfigurationError):
             build_reasoning_client(enabled_settings)
 
-    def test_pipeline_falls_back_when_critic_times_out(self) -> None:
+    def test_pipeline_raises_when_analyst_times_out(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingAnalystReasoningClient())
+
+        with self.assertRaises(OpenAIRequestError):
+            pipeline.run_scenario("postgres_down")
+
+    def test_pipeline_raises_when_critic_times_out(self) -> None:
         pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingCriticReasoningClient())
 
-        state = pipeline.run_scenario("postgres_down")
+        with self.assertRaises(OpenAIRequestError):
+            pipeline.run_scenario("postgres_down")
 
-        self.assertTrue(state["critique"].findings)
-        critic_trace = next(run for run in state["trace_runs"] if run.agent_name == "Critic")
-        self.assertIn("Fell back to deterministic critique", critic_trace.output_summary)
-        follow_up = pipeline.follow_up("What is the root cause?", state)
-        self.assertIn("Most likely root cause", follow_up)
-
-    def test_pipeline_falls_back_when_planner_times_out(self) -> None:
+    def test_pipeline_raises_when_planner_times_out(self) -> None:
         pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingPlannerReasoningClient())
 
-        state = pipeline.run_scenario("postgres_down")
+        with self.assertRaises(OpenAIRequestError):
+            pipeline.run_scenario("postgres_down")
 
-        planner_trace = next(run for run in state["trace_runs"] if run.agent_name == "Planner")
-        self.assertIn("Fell back to deterministic planning", planner_trace.output_summary)
-        self.assertEqual(state["incident_brief"].title, "Incident Brief: postgres_down")
-        self.assertTrue(any(step.action_type == "needs-approval" for step in state["incident_brief"].recommended_actions))
-
-    def test_follow_up_fallback_mentions_model_failure(self) -> None:
+    def test_follow_up_raises_when_model_fails(self) -> None:
         pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingFollowUpReasoningClient())
 
         state = pipeline.run_scenario("postgres_down")
-        follow_up = pipeline.follow_up("What is the root cause?", state)
+        with self.assertRaises(OpenAIRequestError):
+            pipeline.follow_up("What is the root cause?", state)
 
-        self.assertIn("OpenAI follow-up failed", follow_up)
-        self.assertIn("Most likely root cause", follow_up)
+    def test_deterministic_follow_up_handles_confidence_question(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings)
+
+        state = pipeline.run_scenario("postgres_down")
+        follow_up = pipeline.follow_up("How sure are we?", state)
+
+        self.assertIn("Top hypothesis", follow_up)
+        self.assertIn("confidence", follow_up.lower())
+
+    def test_deterministic_follow_up_handles_change_question(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings)
+
+        state = pipeline.run_scenario("postgres_down")
+        follow_up = pipeline.follow_up("Did a deploy cause this?", state)
+
+        self.assertIn("Current change evidence", follow_up)
+        self.assertIn("change.pg.none", follow_up)
+
+    def test_deterministic_follow_up_prioritizes_first_steps(self) -> None:
+        pipeline = IIRSPipeline(settings=self.settings)
+
+        state = pipeline.run_scenario("redis_down")
+        follow_up = pipeline.follow_up("What should I do first?", state)
+
+        self.assertIn("Start here", follow_up)
+        self.assertIn("[auto-safe]", follow_up)
 
 
 if __name__ == "__main__":

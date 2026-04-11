@@ -54,6 +54,7 @@ class EvidenceItem:
 
 @dataclass(slots=True)
 class EvidenceBundle:
+    runtime_states: list[EvidenceItem] = field(default_factory=list)
     logs: list[EvidenceItem] = field(default_factory=list)
     metrics: list[EvidenceItem] = field(default_factory=list)
     traces: list[EvidenceItem] = field(default_factory=list)
@@ -62,6 +63,7 @@ class EvidenceBundle:
 
     def all_items(self) -> list[EvidenceItem]:
         return [
+            *self.runtime_states,
             *self.logs,
             *self.metrics,
             *self.traces,
@@ -148,6 +150,7 @@ class AgentRun:
     finished_at: str
     input_summary: str
     output_summary: str
+    execution_mode: str = "deterministic"
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
 
 

@@ -11,7 +11,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from iirs.config import load_local_env_files
+from iirs.config import Settings, load_local_env_files
 
 
 class ConfigTests(unittest.TestCase):
@@ -52,3 +52,15 @@ class ConfigTests(unittest.TestCase):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+    def test_settings_supports_separate_openai_timeout(self) -> None:
+        previous = os.environ.get("IIRS_OPENAI_TIMEOUT_SECONDS")
+        try:
+            os.environ["IIRS_OPENAI_TIMEOUT_SECONDS"] = "7.5"
+            settings = Settings()
+            self.assertEqual(settings.openai_timeout_seconds, 7.5)
+        finally:
+            if previous is None:
+                os.environ.pop("IIRS_OPENAI_TIMEOUT_SECONDS", None)
+            else:
+                os.environ["IIRS_OPENAI_TIMEOUT_SECONDS"] = previous

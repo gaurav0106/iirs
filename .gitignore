@@ -6,6 +6,11 @@
 __pycache__/
 .pytest_cache/
 .chainlit/
+.claude/
+.codex/
+.playwright/
+.playwright-cli/
 .external/
 traces/
+submission_artifacts/
 *.pyc

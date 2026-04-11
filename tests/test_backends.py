@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs
 
 import httpx
@@ -14,6 +15,7 @@ if str(SRC) not in sys.path:
 
 from iirs.backends import MockTelemetryBackend, PLTHttpTelemetryBackend, QueryTemplates, build_telemetry_backend
 from iirs.config import Settings
+from iirs.models import Citation, EvidenceItem
 from iirs.scenarios import build_alert_for_scenario, get_builtin_scenarios
 
 
@@ -156,3 +158,130 @@ class LiveBackendTests(unittest.TestCase):
         backend = build_telemetry_backend(settings)
 
         self.assertIsInstance(backend, MockTelemetryBackend)
+
+    def test_runtime_states_include_host_processes_and_missing_services(self) -> None:
+        class Completed:
+            def __init__(self, stdout: str) -> None:
+                self.stdout = stdout
+
+        calls: list[list[str]] = []
+
+        def fake_run(args, capture_output, text, check):
+            calls.append(args)
+            if args[:3] == ["docker", "ps", "-a"]:
+                return Completed(
+                    "aspire-postgres-1\tUp 5 minutes\tpostgres:16\n"
+                    "aspire-basketcache-1\tUp 8 minutes\treedis:7\n"
+                )
+            if args == ["ps", "-eo", "pid=,stat=,args="]:
+                return Completed(
+                    "101 Ssl dotnet /tmp/AspireShop.Frontend.dll\n"
+                    "102 Ssl dotnet /tmp/AspireShop.CatalogService.dll\n"
+                )
+            raise AssertionError(f"unexpected subprocess args: {args}")
+
+        backend = PLTHttpTelemetryBackend(
+            prometheus_base_url="http://prometheus.test",
+            loki_base_url="http://loki.test",
+            tempo_base_url="http://tempo.test",
+        )
+
+        with patch("iirs.backends.subprocess.run", side_effect=fake_run):
+            runtime = backend.get_runtime_states(self.alert, services=["aspire-shop"])
+
+        states = {item.metadata["resource"]: item for item in runtime.items}
+        self.assertEqual(states["catalogservice"].metadata["state"], "running")
+        self.assertEqual(states["catalogservice"].citations[0].source, "ps -eo")
+        self.assertEqual(states["frontend"].metadata["state"], "running")
+        self.assertEqual(states["postgres"].metadata["state"], "running")
+        self.assertEqual(states["basketservice"].metadata["state"], "missing")
+        self.assertIn("docker ps -a / ps -eo", states["basketservice"].citations[0].source)
+        self.assertEqual(calls[0][:3], ["docker", "ps", "-a"])
+        self.assertEqual(calls[1], ["ps", "-eo", "pid=,stat=,args="])
+
+    def test_runtime_log_tails_use_docker_for_dependencies_and_loki_for_services(self) -> None:
+        class Completed:
+            def __init__(self, stdout: str = "", stderr: str = "") -> None:
+                self.stdout = stdout
+                self.stderr = stderr
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            params = parse_qs(request.url.query.decode())
+            self.assertEqual(request.url.path, "/loki/api/v1/query_range")
+            self.assertEqual(params["query"][0], '{service_name="catalogservice"}')
+            return httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "data": {
+                        "result": [
+                            {
+                                "stream": {"service_name": "catalogservice"},
+                                "values": [
+                                    ["1712222100000000000", "INFO started ok"],
+                                    ["1712222160000000000", "Unhandled exception during startup"],
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+
+        def fake_run(args, capture_output, text, check):
+            if args[:2] == ["docker", "logs"]:
+                return Completed(stdout="database system is ready\ndatabase connection refused")
+            raise AssertionError(f"unexpected subprocess args: {args}")
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        backend = PLTHttpTelemetryBackend(
+            prometheus_base_url="http://prometheus.test",
+            loki_base_url="http://loki.test",
+            tempo_base_url="http://tempo.test",
+            client=client,
+        )
+        runtime_items = [
+            EvidenceItem(
+                id="runtime.postgres",
+                category="runtime_states",
+                service="postgres",
+                summary="Runtime state for postgres: exited",
+                value="Exited (1) 1 minute ago",
+                citations=[
+                    Citation(
+                        id="runtime.postgres.citation",
+                        source_type="runtime",
+                        source="docker ps -a",
+                        query="runtime",
+                        observed_at=self.alert.started_at,
+                        excerpt="container=aspire-postgres-1",
+                    )
+                ],
+                metadata={"resource": "postgres", "family": "postgres", "role": "dependency", "state": "exited", "container_name": "aspire-postgres-1"},
+            ),
+            EvidenceItem(
+                id="runtime.catalogservice",
+                category="runtime_states",
+                service="catalogservice",
+                summary="Runtime state for catalogservice: missing",
+                value="Process not observed in docker or local process list",
+                citations=[
+                    Citation(
+                        id="runtime.catalogservice.citation",
+                        source_type="runtime",
+                        source="docker ps -a / ps -eo",
+                        query="runtime",
+                        observed_at=self.alert.started_at,
+                        excerpt="resource not observed",
+                    )
+                ],
+                metadata={"resource": "catalogservice", "family": "catalogservice", "role": "service", "state": "missing"},
+            ),
+        ]
+
+        with patch("iirs.backends.subprocess.run", side_effect=fake_run):
+            result = backend.get_runtime_log_tails(self.alert, runtime_items)
+
+        ids = [item.id for item in result.items]
+        self.assertIn("log.runtime.tail.postgres.docker.1", ids)
+        self.assertIn("log.runtime.tail.catalogservice.loki.1", ids)
+        self.assertIn("connection refused", result.items[0].value.lower())

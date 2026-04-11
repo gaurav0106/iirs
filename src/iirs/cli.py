@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from .evaluation import EvaluationHarness, render_evaluation_json, render_evaluation_markdown
+from .llm import OpenAIRequestError
 from .live_signatures import (
     LiveSignatureHarness,
     render_live_signature_json,
@@ -39,6 +40,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--show-trace",
         action="store_true",
         help="Print a compact trace summary after the incident brief.",
+    )
+
+    ask_parser = subparsers.add_parser(
+        "ask",
+        help="Run a scenario or alert and ask a follow-up question against the resulting incident state.",
+    )
+    ask_parser.add_argument(
+        "--scenario",
+        choices=["postgres_down", "redis_down"],
+        help="Built-in incident scenario to execute.",
+    )
+    ask_parser.add_argument(
+        "--alert-file",
+        type=Path,
+        help="Path to an alert payload JSON file.",
+    )
+    ask_parser.add_argument(
+        "--show-trace",
+        action="store_true",
+        help="Print a compact trace summary after the follow-up answer.",
+    )
+    ask_parser.add_argument(
+        "question",
+        help="Follow-up question to ask about the resulting incident state.",
+    )
+
+    llm_parser = subparsers.add_parser(
+        "llm-check",
+        help="Verify that the configured OpenAI-backed reasoning client is reachable.",
     )
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate built-in scenarios against ground-truth labels.")
@@ -90,6 +120,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_state_from_run_args(
+    pipeline: IIRSPipeline,
+    parser: argparse.ArgumentParser,
+    *,
+    scenario: str | None,
+    alert_file: Path | None,
+):
+    if bool(scenario) == bool(alert_file):
+        parser.error("Specify exactly one of --scenario or --alert-file.")
+    if scenario:
+        return pipeline.run_scenario(scenario)
+    return pipeline.run(pipeline.load_alert(alert_file))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -97,12 +141,16 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = IIRSPipeline()
 
     if args.command == "run":
-        if bool(args.scenario) == bool(args.alert_file):
-            parser.error("Specify exactly one of --scenario or --alert-file.")
-        if args.scenario:
-            state = pipeline.run_scenario(args.scenario)
-        else:
-            state = pipeline.run(pipeline.load_alert(args.alert_file))
+        try:
+            state = _load_state_from_run_args(
+                pipeline,
+                parser,
+                scenario=args.scenario,
+                alert_file=args.alert_file,
+            )
+        except OpenAIRequestError as exc:
+            print(f"Model request failed; stopping instead of falling back: {exc}")
+            return 1
 
         brief = state["incident_brief"]
         if args.format == "json":
@@ -114,6 +162,40 @@ def main(argv: list[str] | None = None) -> int:
         if args.show_trace:
             print("\nTrace summary:")
             print(render_trace_text(state["trace_runs"]))
+        return 0
+
+    if args.command == "ask":
+        try:
+            state = _load_state_from_run_args(
+                pipeline,
+                parser,
+                scenario=args.scenario,
+                alert_file=args.alert_file,
+            )
+            print(pipeline.follow_up(args.question, state))
+        except OpenAIRequestError as exc:
+            print(f"Model request failed; stopping instead of falling back: {exc}")
+            return 1
+        print(f"\nTrace: {state['trace_path']}")
+        if args.show_trace:
+            print("\nTrace summary:")
+            print(render_trace_text(state["trace_runs"]))
+        return 0
+
+    if args.command == "llm-check":
+        llm = pipeline.context.llm
+        if llm is None:
+            print(
+                "OpenAI-backed reasoning is not enabled. Set OPENAI_API_KEY and leave "
+                "IIRS_USE_OPENAI_AGENTS unset or set it to true."
+            )
+            return 1
+        try:
+            message = llm.check_connection()
+        except Exception as exc:
+            print(f"LLM check failed: {exc}")
+            return 1
+        print(message)
         return 0
 
     if args.command == "eval":

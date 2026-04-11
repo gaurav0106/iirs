@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import re
+import shlex
+import subprocess
 from typing import Any, TYPE_CHECKING, Protocol
 
 import httpx
@@ -15,6 +18,10 @@ if TYPE_CHECKING:
 
 
 class TelemetryBackend(Protocol):
+    def get_runtime_states(self, alert: AlertPayload, services: list[str] | None = None) -> ToolResult: ...
+
+    def get_runtime_log_tails(self, alert: AlertPayload, runtime_items: list[EvidenceItem]) -> ToolResult: ...
+
     def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
 
     def get_latency_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
@@ -51,6 +58,14 @@ class LiveMetricProfile:
         return parts
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeResourceSpec:
+    name: str
+    aliases: tuple[str, ...]
+    family: str
+    role: str
+
+
 _DEFAULT_METRIC_PROFILE = LiveMetricProfile()
 _LIVE_METRIC_PROFILES: dict[tuple[str, str | None], LiveMetricProfile] = {
     ("catalogservice", "postgres_down"): LiveMetricProfile(
@@ -64,6 +79,43 @@ _LIVE_METRIC_PROFILES: dict[tuple[str, str | None], LiveMetricProfile] = {
         runtime_exception_pattern="RedisConnectionException|RedisTimeoutException|SocketException",
         failed_trace_filter='name =~ "POST /BasketApi.Basket/.*" && trace:duration > 4s',
     ),
+}
+_RUNTIME_RESOURCE_SPECS: tuple[RuntimeResourceSpec, ...] = (
+    RuntimeResourceSpec(
+        name="frontend",
+        aliases=("frontend", "aspireshop.frontend", "aspireshop_frontend"),
+        family="frontend",
+        role="service",
+    ),
+    RuntimeResourceSpec(
+        name="catalogservice",
+        aliases=("catalogservice", "aspireshop.catalogservice", "aspireshop_catalogservice"),
+        family="catalogservice",
+        role="service",
+    ),
+    RuntimeResourceSpec(
+        name="basketservice",
+        aliases=("basketservice", "aspireshop.basketservice", "aspireshop_basketservice"),
+        family="basketservice",
+        role="service",
+    ),
+    RuntimeResourceSpec(name="postgres", aliases=("postgres",), family="postgres", role="dependency"),
+    RuntimeResourceSpec(name="catalogdb", aliases=("catalogdb",), family="postgres", role="dependency"),
+    RuntimeResourceSpec(
+        name="catalogdbmanager",
+        aliases=("catalogdbmanager", "aspireshop.catalogdbmanager", "aspireshop_catalogdbmanager"),
+        family="postgres",
+        role="support",
+    ),
+    RuntimeResourceSpec(name="basketcache", aliases=("basketcache",), family="redis", role="dependency"),
+    RuntimeResourceSpec(name="rediscommander", aliases=("rediscommander",), family="redis", role="support"),
+    RuntimeResourceSpec(name="pgadmin", aliases=("pgadmin",), family="postgres", role="support"),
+)
+_RUNTIME_SCOPE: dict[str, tuple[str, ...]] = {
+    "aspire-shop": tuple(spec.name for spec in _RUNTIME_RESOURCE_SPECS),
+    "frontend": ("frontend", "catalogservice", "basketservice", "postgres", "catalogdb", "basketcache"),
+    "catalogservice": ("catalogservice", "postgres", "catalogdb", "catalogdbmanager"),
+    "basketservice": ("basketservice", "basketcache", "rediscommander"),
 }
 
 
@@ -236,12 +288,115 @@ def _clip_text(value: str, limit: int = 240) -> str:
     return value[: limit - 3] + "..."
 
 
+def _unique_nonempty_lines(lines: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for line in lines:
+        normalized = line.strip()
+        if not normalized or normalized in seen:
+            continue
+        result.append(normalized)
+        seen.add(normalized)
+    return result
+
+
+def _interesting_log_lines(lines: list[str], *, limit: int = 3) -> list[str]:
+    error_terms = (
+        "error",
+        "exception",
+        "fail",
+        "fatal",
+        "timeout",
+        "timed out",
+        "refused",
+        "unavailable",
+        "panic",
+        "crash",
+    )
+    unique_lines = _unique_nonempty_lines(lines)
+    prioritized = [line for line in reversed(unique_lines) if any(term in line.lower() for term in error_terms)]
+    if prioritized:
+        return prioritized[:limit]
+    return list(reversed(unique_lines[-limit:]))
+
+
 def _format_labels(labels: dict[str, str]) -> str:
     pairs = [f"{key}={value}" for key, value in sorted(labels.items()) if key != "__name__"]
     return ", ".join(pairs)
 
 
+def _runtime_scope_for_services(services: list[str] | None) -> list[RuntimeResourceSpec]:
+    requested = services or ["aspire-shop"]
+    wanted: list[str] = []
+    for service in requested:
+        wanted.extend(_RUNTIME_SCOPE.get(service, (service,)))
+
+    seen: set[str] = set()
+    specs: list[RuntimeResourceSpec] = []
+    for spec in _RUNTIME_RESOURCE_SPECS:
+        if spec.name in wanted and spec.name not in seen:
+            specs.append(spec)
+            seen.add(spec.name)
+    return specs
+
+
+def _resource_name_matches(container_name: str, spec: RuntimeResourceSpec) -> bool:
+    lowered = container_name.lower()
+    for alias in spec.aliases:
+        pattern = rf"(^|[-_.]){re.escape(alias)}($|[-_.])"
+        if re.search(pattern, lowered):
+            return True
+    return False
+
+
+def _process_name_matches(command_text: str, spec: RuntimeResourceSpec) -> bool:
+    lowered = command_text.lower()
+    normalized = re.sub(r"[^a-z0-9]+", "", lowered)
+    for alias in spec.aliases:
+        alias_lower = alias.lower()
+        if alias_lower in lowered:
+            return True
+        alias_normalized = re.sub(r"[^a-z0-9]+", "", alias_lower)
+        if alias_normalized and alias_normalized in normalized:
+            return True
+    return False
+
+
+def _runtime_state_bucket(status_text: str) -> str:
+    lowered = status_text.lower()
+    if lowered.startswith("up"):
+        return "unhealthy" if "unhealthy" in lowered else "running"
+    if lowered.startswith("exited"):
+        return "exited"
+    if lowered.startswith("restarting"):
+        return "restarting"
+    if lowered.startswith("created"):
+        return "created"
+    if "dead" in lowered:
+        return "dead"
+    return "unknown"
+
+
+def _process_state_bucket(status_text: str) -> str:
+    lowered = status_text.strip().lower()
+    if not lowered:
+        return "unknown"
+    if lowered.startswith("z"):
+        return "dead"
+    if lowered.startswith("t"):
+        return "unknown"
+    return "running"
+
+
 class MockTelemetryBackend:
+    def get_runtime_states(self, alert: AlertPayload, services: list[str] | None = None) -> ToolResult:
+        requested = ",".join(services or [alert.service])
+        return ToolResult(query=f"runtime:{requested}", items=[])
+
+    def get_runtime_log_tails(self, alert: AlertPayload, runtime_items: list[EvidenceItem]) -> ToolResult:
+        resources = ",".join(str(item.metadata.get("resource") or item.service) for item in runtime_items)
+        return ToolResult(query=f"runtime-log-tails:{resources}", items=[])
+
     def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
         query = QueryTemplates.for_alert(alert).error_logs()
         items = [
@@ -346,13 +501,208 @@ class PLTHttpTelemetryBackend:
         timeout_seconds: float = 10.0,
         verify_tls: bool = True,
         tenant_id: str | None = None,
+        docker_command: str = "docker",
         client: httpx.Client | None = None,
     ) -> None:
         self.prometheus_base_url = prometheus_base_url.rstrip("/")
         self.loki_base_url = loki_base_url.rstrip("/")
         self.tempo_base_url = tempo_base_url.rstrip("/")
         self.tenant_id = tenant_id
+        self.docker_command = docker_command
         self.client = client or httpx.Client(timeout=timeout_seconds, verify=verify_tls, follow_redirects=True)
+
+    def get_runtime_states(self, alert: AlertPayload, services: list[str] | None = None) -> ToolResult:
+        specs = _runtime_scope_for_services(services or [alert.service])
+        query = (
+            f"{self.docker_command} ps -a --format '{{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Image}}}}'; "
+            "ps -eo pid=,stat=,args="
+        )
+        if not specs:
+            return ToolResult(query=query, items=[])
+
+        try:
+            completed = subprocess.run(
+                [*shlex.split(self.docker_command), "ps", "-a", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            docker_lines = completed.stdout.splitlines()
+        except (OSError, subprocess.CalledProcessError):
+            docker_lines = []
+
+        try:
+            process_listing = subprocess.run(
+                ["ps", "-eo", "pid=,stat=,args="],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            process_lines = process_listing.stdout.splitlines()
+        except (OSError, subprocess.CalledProcessError):
+            process_lines = []
+
+        containers: list[tuple[str, str, str]] = []
+        for raw_line in docker_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 2)
+            if len(parts) != 3:
+                continue
+            containers.append((parts[0], parts[1], parts[2]))
+
+        processes: list[tuple[str, str, str]] = []
+        for raw_line in process_lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split(None, 2)
+            if len(parts) != 3:
+                continue
+            processes.append((parts[0], parts[1], parts[2]))
+
+        items: list[EvidenceItem] = []
+        for spec in specs:
+            match = next((container for container in containers if _resource_name_matches(container[0], spec)), None)
+            if match is not None:
+                name, status_text, image = match
+                state = _runtime_state_bucket(status_text)
+                items.append(
+                    EvidenceItem(
+                        id=f"runtime.{spec.name}",
+                        category="runtime_states",
+                        service=spec.name,
+                        summary=f"Runtime state for {spec.name}: {state}",
+                        value=status_text,
+                        citations=[
+                            Citation(
+                                id=f"runtime.{spec.name}.citation",
+                                source_type="runtime",
+                                source="docker ps -a",
+                                query=query,
+                                observed_at=alert.started_at,
+                                excerpt=f"container={name}; status={status_text}; image={image}",
+                            )
+                        ],
+                        metadata={
+                            "resource": spec.name,
+                            "family": spec.family,
+                            "role": spec.role,
+                            "state": state,
+                            "container_name": name,
+                            "image": image,
+                        },
+                    )
+                )
+                continue
+
+            process_match = next((process for process in processes if _process_name_matches(process[2], spec)), None)
+            if process_match is not None:
+                pid, status_text, command_text = process_match
+                state = _process_state_bucket(status_text)
+                items.append(
+                    EvidenceItem(
+                        id=f"runtime.{spec.name}",
+                        category="runtime_states",
+                        service=spec.name,
+                        summary=f"Runtime state for {spec.name}: {state}",
+                        value=f"pid={pid}; stat={status_text}",
+                        citations=[
+                            Citation(
+                                id=f"runtime.{spec.name}.citation",
+                                source_type="runtime",
+                                source="ps -eo",
+                                query=query,
+                                observed_at=alert.started_at,
+                                excerpt=f"pid={pid}; stat={status_text}; args={_clip_text(command_text)}",
+                            )
+                        ],
+                        metadata={
+                            "resource": spec.name,
+                            "family": spec.family,
+                            "role": spec.role,
+                            "state": state,
+                            "pid": pid,
+                            "process_args": command_text,
+                        },
+                    )
+                )
+                continue
+
+            if spec.role != "service":
+                continue
+
+            items.append(
+                EvidenceItem(
+                    id=f"runtime.{spec.name}",
+                    category="runtime_states",
+                    service=spec.name,
+                    summary=f"Runtime state for {spec.name}: missing",
+                    value="Process not observed in docker or local process list",
+                    citations=[
+                        Citation(
+                            id=f"runtime.{spec.name}.citation",
+                            source_type="runtime",
+                            source="docker ps -a / ps -eo",
+                            query=query,
+                            observed_at=alert.started_at,
+                            excerpt="resource not observed in local process or container listings",
+                        )
+                    ],
+                    metadata={
+                        "resource": spec.name,
+                        "family": spec.family,
+                        "role": spec.role,
+                        "state": "missing",
+                    },
+                )
+            )
+
+        severity_order = {
+            "dead": 0,
+            "restarting": 1,
+            "missing": 2,
+            "exited": 3,
+            "unhealthy": 4,
+            "created": 5,
+            "unknown": 6,
+            "running": 7,
+        }
+        items.sort(key=lambda item: (severity_order.get(str(item.metadata.get("state")), 99), str(item.metadata.get("resource"))))
+        return ToolResult(query=query, items=items)
+
+    def get_runtime_log_tails(self, alert: AlertPayload, runtime_items: list[EvidenceItem]) -> ToolResult:
+        targeted_items = [
+            item
+            for item in runtime_items
+            if str(item.metadata.get("state", "")).lower() != "running"
+            and str(item.metadata.get("role", "")).lower() in {"service", "dependency"}
+        ]
+        resources = [
+            str(item.metadata.get("resource") or item.service)
+            for item in targeted_items
+        ]
+        if not resources:
+            return ToolResult(query="runtime-log-tails:none", items=[])
+
+        items: list[EvidenceItem] = []
+        seen_resources: set[str] = set()
+        for runtime_item in targeted_items:
+            resource = str(runtime_item.metadata.get("resource") or runtime_item.service)
+            if resource in seen_resources:
+                continue
+            seen_resources.add(resource)
+
+            container_name = str(runtime_item.metadata.get("container_name") or "").strip()
+            if container_name:
+                items.extend(self._docker_tail_items(alert, runtime_item, container_name))
+                continue
+
+            if str(runtime_item.metadata.get("role", "")).lower() == "service":
+                items.extend(self._loki_tail_items(alert, runtime_item))
+
+        return ToolResult(query=f"runtime-log-tails:{','.join(resources)}", items=items[:12])
 
     def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
         query = QueryTemplates.for_alert(alert).error_logs()
@@ -589,6 +939,97 @@ class PLTHttpTelemetryBackend:
             )
         return ToolResult(query=query, items=items)
 
+    def _docker_tail_items(
+        self,
+        alert: AlertPayload,
+        runtime_item: EvidenceItem,
+        container_name: str,
+    ) -> list[EvidenceItem]:
+        resource = str(runtime_item.metadata.get("resource") or runtime_item.service)
+        query = f"{self.docker_command} logs --tail 25 {container_name}"
+        try:
+            completed = subprocess.run(
+                [*shlex.split(self.docker_command), "logs", "--tail", "25", container_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return []
+
+        combined = "\n".join(part for part in [completed.stdout, completed.stderr] if part)
+        selected_lines = _interesting_log_lines(combined.splitlines(), limit=3)
+        items: list[EvidenceItem] = []
+        for index, line in enumerate(selected_lines, start=1):
+            excerpt = _clip_text(line)
+            items.append(
+                EvidenceItem(
+                    id=f"log.runtime.tail.{resource}.docker.{index}",
+                    category="logs",
+                    service=resource,
+                    summary=f"Recent runtime log tail for {resource}",
+                    value=excerpt,
+                    citations=[
+                        Citation(
+                            id=f"log.runtime.tail.{resource}.docker.{index}.citation",
+                            source_type="docker-logs",
+                            source=f"docker logs {container_name}",
+                            query=query,
+                            observed_at=alert.started_at,
+                            excerpt=excerpt,
+                        )
+                    ],
+                    metadata={
+                        "resource": resource,
+                        "origin": "docker-logs",
+                        "container_name": container_name,
+                    },
+                )
+            )
+        return items
+
+    def _loki_tail_items(self, alert: AlertPayload, runtime_item: EvidenceItem) -> list[EvidenceItem]:
+        resource = str(runtime_item.metadata.get("resource") or runtime_item.service)
+        query = f'{{service_name="{resource}"}}'
+        start, end = _time_window(alert)
+        payload = self._request(
+            "loki",
+            f"{self.loki_base_url}/loki/api/v1/query_range",
+            params={"query": query, "start": start, "end": end, "limit": 20, "direction": "backward"},
+        )
+        streams = payload.get("result", [])
+        collected: list[tuple[str, str]] = []
+        for stream in streams:
+            for raw_ts, line in stream.get("values", []):
+                collected.append((_coerce_timestamp(raw_ts, alert.started_at), str(line)))
+
+        selected_lines = _interesting_log_lines([line for _, line in collected], limit=3)
+        items: list[EvidenceItem] = []
+        for index, line in enumerate(selected_lines, start=1):
+            observed_at = next((timestamp for timestamp, text in collected if text.strip() == line.strip()), alert.started_at)
+            excerpt = _clip_text(line)
+            items.append(
+                EvidenceItem(
+                    id=f"log.runtime.tail.{resource}.loki.{index}",
+                    category="logs",
+                    service=resource,
+                    summary=f"Recent runtime log tail for {resource}",
+                    value=excerpt,
+                    citations=[
+                        Citation(
+                            id=f"log.runtime.tail.{resource}.loki.{index}.citation",
+                            source_type="loki",
+                            source=f"{self.loki_base_url}/loki/api/v1/query_range",
+                            query=query,
+                            observed_at=observed_at,
+                            excerpt=excerpt,
+                        )
+                    ],
+                    metadata={"resource": resource, "origin": "loki-tail"},
+                )
+            )
+        return items
+
 
 def build_telemetry_backend(settings: "Settings", *, client: httpx.Client | None = None) -> TelemetryBackend:
     backend_name = settings.telemetry_backend.strip().lower()
@@ -622,5 +1063,6 @@ def build_telemetry_backend(settings: "Settings", *, client: httpx.Client | None
         timeout_seconds=settings.http_timeout_seconds,
         verify_tls=settings.verify_tls,
         tenant_id=settings.tenant_id,
+        docker_command=settings.docker_command,
         client=client,
     )

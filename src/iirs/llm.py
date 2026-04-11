@@ -19,6 +19,8 @@ class ReasoningClient(Protocol):
 
     def answer_follow_up(self, question: str, state: IIRSState) -> str: ...
 
+    def check_connection(self) -> str: ...
+
 
 class OpenAIConfigurationError(RuntimeError):
     pass
@@ -66,8 +68,14 @@ class OpenAIResponsesReasoner:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.reasoning_effort = reasoning_effort
+        self.timeout_seconds = timeout_seconds
         self.client = client or httpx.Client(
-            timeout=timeout_seconds,
+            timeout=httpx.Timeout(
+                connect=min(timeout_seconds, 10.0),
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=timeout_seconds,
+            ),
             verify=verify_tls,
             follow_redirects=True,
         )
@@ -101,11 +109,20 @@ class OpenAIResponsesReasoner:
             ["summary", "hypotheses"],
         )
         system_prompt = (
-            "You are the IIRS Analyst agent. Rank likely root causes using only the provided alert and evidence. "
+            "You are the IIRS Analyst agent. Act like a pragmatic incident responder, not a report generator. "
+            "Rank likely root causes using only the provided alert and evidence. "
             "Every evidence reference must use one of the provided evidence IDs. "
+            "Prefer direct dependency failures and explicit runtime-state evidence over vague circumstantial theories. "
+            "If the evidence is mixed, lower confidence instead of forcing certainty. "
             "Prefer short canonical titles. If the evidence clearly shows PostgreSQL is unavailable, use the title "
             "'PostgreSQL dependency outage'. If it clearly shows Redis is unavailable, use the title "
-            "'Redis dependency outage'. Keep the response concise."
+            "'Redis dependency outage'. If a service shows dependency-specific failures but runtime state does not "
+            "clearly prove the dependency is down, use a title like "
+            "'catalogservice to PostgreSQL dependency path degraded' or "
+            "'basketservice to Redis dependency path degraded'. If alert.labels.mode is 'live-health-check' and core runtime "
+            "resources are still running, prefer 'No clear live fault detected' as the top hypothesis and keep speculative "
+            "degradations secondary unless there is direct current failure evidence. If multiple independent resources are explicitly down, use the title "
+            "'Multiple service outages in Aspire Shop'. Keep the response concise."
         )
         return self._structured_response(
             schema_name="iirs_analyst_response",
@@ -146,8 +163,8 @@ class OpenAIResponsesReasoner:
         )
         system_prompt = (
             "You are the IIRS Critic agent. Validate that the analyst output is evidence-grounded, conservative, "
-            "and safe. Flag weak support, missing data, or mitigation risk. Use only provided evidence IDs. "
-            "Keep lists short and avoid repeating the same point."
+            "and operationally sane. Flag weak support, missing data, approval boundaries, or risky leaps. "
+            "Use only provided evidence IDs. Keep lists short and avoid repeating the same point."
         )
         return self._structured_response(
             schema_name="iirs_critic_response",
@@ -189,7 +206,11 @@ class OpenAIResponsesReasoner:
             ],
         )
         system_prompt = (
-            "You are the IIRS Planner agent. Produce a concise incident brief and a step-by-step triage plan. "
+            "You are the IIRS Planner agent. Produce a concise incident brief and a triage plan that is actually useful "
+            "under pressure. Start with the highest-value checks, avoid filler, and keep the steps concrete. "
+            "If runtime-state evidence names specific exited or unhealthy resources, name those resources directly in the plan. "
+            "If the top hypothesis is 'No clear live fault detected', keep the brief in health-check mode and avoid restarts, rollbacks, "
+            "or other state-changing steps unless fresh evidence shows a concrete failing resource. "
             "Mark read-only diagnostic actions as 'auto-safe'. Mark any state-changing actions such as restarts, "
             "failover, rollback, or traffic changes as 'needs-approval'. Use only provided evidence IDs. "
             "Keep the plan concise."
@@ -203,13 +224,30 @@ class OpenAIResponsesReasoner:
 
     def answer_follow_up(self, question: str, state: IIRSState) -> str:
         system_prompt = (
-            "You are the IIRS follow-up assistant. Answer only from the provided incident state. "
-            "Be concise, mention uncertainty when needed, and cite evidence IDs inline when useful."
+            "You are the IIRS follow-up assistant. Answer the user's actual question from the provided incident state. "
+            "Be direct, pragmatic, and concise. Handle indirect or skeptical questions normally. "
+            "Use recent conversation messages to resolve references like 'that', 'it', 'why?', or 'then what?' and keep continuity across the last few turns. "
+            "If the state does not contain an answer, say so plainly instead of guessing. "
+            "When useful, separate what is known, what is uncertain, and what should happen next. "
+            "Cite evidence IDs inline when that helps."
         )
         return self._text_response(
             system_prompt=system_prompt,
             user_prompt=self._follow_up_prompt(question, state),
             max_output_tokens=500,
+        )
+
+    def check_connection(self) -> str:
+        return self._text_response(
+            system_prompt=(
+                "You are a connectivity probe for the IIRS incident assistant. "
+                "Reply with one short line confirming the model is reachable."
+            ),
+            user_prompt=(
+                f"Return a one-line readiness message that includes the exact model name `{self.model}` "
+                "and no extra explanation."
+            ),
+            max_output_tokens=60,
         )
 
     def _analyst_prompt(self, state: IIRSState) -> str:
@@ -240,8 +278,19 @@ class OpenAIResponsesReasoner:
         payload = {
             "question": question,
             "alert": to_jsonable(state["alert"]),
+            "hypotheses": [self._serialize_hypothesis(item) for item in state["incident_brief"].probable_root_causes],
+            "critique": self._serialize_critique(state["critique"]),
             "incident_brief": to_jsonable(state["incident_brief"]),
             "evidence_bundle": self._serialize_evidence_bundle(state["evidence_bundle"]),
+            "messages": [to_jsonable(item) for item in state.get("messages", [])[-8:]],
+            "trace_runs": [
+                {
+                    "agent_name": run.agent_name,
+                    "input_summary": run.input_summary,
+                    "output_summary": run.output_summary,
+                }
+                for run in state.get("trace_runs", [])
+            ],
         }
         return json.dumps(payload, indent=2)
 
@@ -298,7 +347,7 @@ class OpenAIResponsesReasoner:
         system_prompt: str,
         user_prompt: str,
     ) -> dict[str, Any]:
-        max_output_tokens = 900
+        max_output_tokens = 1200
         effort = self.reasoning_effort
         for attempt in range(2):
             payload: dict[str, Any] = {
@@ -314,7 +363,7 @@ class OpenAIResponsesReasoner:
                 text = self._extract_output_text(data)
             except OpenAIRequestError:
                 if attempt == 0 and self._should_retry_for_output(data):
-                    max_output_tokens = 1800
+                    max_output_tokens = max(max_output_tokens * 2, 2400)
                     effort = self._fallback_reasoning_effort(effort)
                     continue
                 raise
@@ -322,7 +371,7 @@ class OpenAIResponsesReasoner:
                 return json.loads(text)
             except json.JSONDecodeError as exc:
                 if attempt == 0 and self._should_retry_for_output(data):
-                    max_output_tokens = 1800
+                    max_output_tokens = max(max_output_tokens * 2, 2400)
                     effort = self._fallback_reasoning_effort(effort)
                     continue
                 raise OpenAIRequestError(f"OpenAI response did not contain valid JSON: {text!r}") from exc
@@ -371,6 +420,11 @@ class OpenAIResponsesReasoner:
         try:
             response = self.client.post(f"{self.base_url}/responses", headers=headers, json=payload)
             response.raise_for_status()
+        except httpx.ReadTimeout as exc:
+            raise OpenAIRequestError(
+                "OpenAI Responses API read timed out while waiting for model output. "
+                f"Current timeout is {self.timeout_seconds:.0f}s; increase IIRS_OPENAI_TIMEOUT_SECONDS if needed."
+            ) from exc
         except httpx.HTTPError as exc:
             raise OpenAIRequestError(f"OpenAI Responses API request failed: {exc}") from exc
 
@@ -399,10 +453,7 @@ class OpenAIResponsesReasoner:
 
     def _should_retry_for_output(self, payload: dict[str, Any]) -> bool:
         incomplete = payload.get("incomplete_details") or {}
-        if incomplete.get("reason") != "max_output_tokens":
-            return False
-        output = payload.get("output", [])
-        return bool(output) and all(item.get("type") == "reasoning" for item in output)
+        return incomplete.get("reason") == "max_output_tokens"
 
     def _fallback_reasoning_effort(self, effort: str) -> str:
         order = ["high", "medium", "low", "minimal"]
@@ -430,7 +481,7 @@ def build_reasoning_client(
         model=settings.agent_model,
         base_url=settings.openai_base_url,
         reasoning_effort=settings.openai_reasoning_effort,
-        timeout_seconds=max(60.0, settings.http_timeout_seconds),
+        timeout_seconds=settings.openai_timeout_seconds,
         verify_tls=settings.verify_tls,
         client=client,
     )

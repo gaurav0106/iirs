@@ -66,6 +66,7 @@ class Settings:
     prometheus_base_url: str | None = field(default_factory=lambda: os.getenv("IIRS_PROMETHEUS_URL"))
     loki_base_url: str | None = field(default_factory=lambda: os.getenv("IIRS_LOKI_URL"))
     tempo_base_url: str | None = field(default_factory=lambda: os.getenv("IIRS_TEMPO_URL"))
+    docker_command: str = field(default_factory=lambda: os.getenv("IIRS_DOCKER_CMD", "docker").strip())
     openai_api_key: str | None = field(
         default_factory=lambda: os.getenv("OPENAI_API_KEY") or os.getenv("IIRS_OPENAI_API_KEY")
     )
@@ -77,6 +78,9 @@ class Settings:
     )
     openai_base_url: str = field(
         default_factory=lambda: os.getenv("IIRS_OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+    )
+    openai_timeout_seconds: float = field(
+        default_factory=lambda: _env_float("IIRS_OPENAI_TIMEOUT_SECONDS", 60.0)
     )
     openai_reasoning_effort: str = field(
         default_factory=lambda: os.getenv("IIRS_OPENAI_REASONING_EFFORT", "low").strip().lower()

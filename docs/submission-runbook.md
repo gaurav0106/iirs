@@ -36,7 +36,9 @@ Recommended order:
 
 The live Redis E2E depends on local Aspire Shop changes that are not tracked in the top-level git repo because `.external/` is ignored.
 
-If you clone this repository fresh, do this after bootstrapping Aspire Shop:
+`./scripts/bootstrap_aspire_shop.sh` now applies that patch automatically for the default `.external/aspire-samples` checkout.
+
+If you fetched Aspire Shop some other way, or you already have an older unpatched checkout, do this:
 
 ```bash
 git -C .external/aspire-samples apply "$PWD/patches/aspire-shop-local-e2e.patch"
@@ -73,7 +75,6 @@ If Aspire Shop is not present:
 
 ```bash
 ./scripts/bootstrap_aspire_shop.sh
-git -C .external/aspire-samples apply "$PWD/patches/aspire-shop-local-e2e.patch"
 ```
 
 ## Save Basic Proof
@@ -96,6 +97,14 @@ IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario postgres_down --sho
 ```
 
 That preserves the multi-agent demo even when the live environment is being annoying.
+
+If OpenAI-backed runs time out while waiting for model output, that is usually a model latency issue rather than a bad key. Raise the timeout before the demo if needed:
+
+```bash
+export IIRS_OPENAI_TIMEOUT_SECONDS=90
+```
+
+Model-enabled runs now fail cleanly on timeout or invalid structured output instead of silently falling back to deterministic answers.
 
 ## Start The Live Stack
 

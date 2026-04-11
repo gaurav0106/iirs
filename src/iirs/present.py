@@ -30,7 +30,7 @@ def render_brief_markdown(brief: IncidentBrief) -> str:
 def render_trace_text(runs: list[AgentRun]) -> str:
     lines = []
     for run in runs:
-        lines.append(f"{run.agent_name}: {run.output_summary}")
+        lines.append(f"{run.agent_name} [{run.execution_mode}]: {run.output_summary}")
         for tool_call in run.tool_calls:
             lines.append(
                 f"  - {tool_call.tool_name} -> {', '.join(tool_call.evidence_ids) or 'no evidence'}"

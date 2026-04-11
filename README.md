@@ -51,6 +51,7 @@ Recommended `.env.local`:
 OPENAI_API_KEY=sk-...
 IIRS_AGENT_MODEL=gpt-5-mini
 IIRS_OPENAI_REASONING_EFFORT=low
+IIRS_OPENAI_TIMEOUT_SECONDS=60
 IIRS_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
@@ -59,6 +60,9 @@ Notes:
 - `gpt-5-mini` is the best default from the currently supported models for this project
 - if a key is present, Analyst, Critic, Planner, and follow-up answers use OpenAI automatically
 - set `IIRS_USE_OPENAI_AGENTS=false` to force deterministic behavior
+- model-enabled runs fail cleanly on timeout or invalid structured output instead of falling back to a weaker deterministic answer
+- use `iirs llm-check` to verify the OpenAI path before testing incidents
+- if model calls are slow in your environment, raise `IIRS_OPENAI_TIMEOUT_SECONDS` to `90` or higher
 - Retriever remains deterministic today
 
 ## Fastest path: mock end-to-end
@@ -84,18 +88,48 @@ What you should see:
 - actions split into `auto-safe` and `needs-approval`
 - a trace path under `traces/`
 
+When you pass `--show-trace`, each stage is labeled as `[tooling]`, `[model]`, or `[deterministic]` so you can tell whether the run actually used the LLM.
+
+### Real LLM smoke check
+
+Verify the configured model path first:
+
+```bash
+iirs llm-check
+```
+
+Then ask a follow-up question against a scenario from the CLI:
+
+```bash
+iirs ask --scenario postgres_down "How sure are we?"
+iirs ask --scenario postgres_down "Did a deploy cause this?"
+iirs ask --scenario redis_down "What should I do first?"
+```
+
+If the model is unavailable, these commands should fail cleanly instead of silently falling back to a weaker answer.
+
 ### Chainlit
 
 ```bash
 source .venv/bin/activate
-chainlit run chainlit_app.py -h
+chainlit run chainlit_app.py --port 8000
 ```
 
-Then send:
+Useful prompt styles:
 
-1. `postgres_down` or `redis_down`
-2. a follow-up like `What is the root cause?`
-3. or a full alert JSON payload
+1. shortcuts: `postgres_down` or `redis_down`
+2. dependency-shaped incidents: `catalogservice is timing out and PostgreSQL looks down`
+3. broad live diagnosis: `what broke in aspire shop right now?`
+4. broad health checks: `is everything healthy or broken right now?` or `can you check the health of aspireshop?`
+5. user-facing page issues: `the aspire shop page is not loading at all`
+6. follow-ups after a run: `why?`, `show me more`, `then what?`, `is it healthy?`
+7. a full alert JSON payload
+
+Notes:
+
+- broad health-check prompts use a safer `live-health-check` mode that prefers `No clear live fault detected` when runtime state is green
+- short follow-ups are resolved against the current incident state instead of starting a new run
+- if a model-backed stage fails, Chainlit stops that run and shows the model error instead of silently falling back
 
 ### Evaluation
 
@@ -164,14 +198,15 @@ Ports:
 ./scripts/bootstrap_aspire_shop.sh
 ```
 
-This clones the upstream sample into `.external/aspire-samples` by default.
+This clones the upstream sample into `.external/aspire-samples` by default and
+auto-applies the local patch in [`patches/aspire-shop-local-e2e.patch`](/home/gaurav/code-ubuntu/personal/capstone/patches/aspire-shop-local-e2e.patch).
 
 ### 3. Run Aspire Shop against the local collector
 
 ```bash
 cd .external/aspire-samples/samples/aspire-shop
-export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-export OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+export IIRS_OTLP_ENDPOINT=http://127.0.0.1:4317
+export IIRS_OTLP_PROTOCOL=grpc
 aspire run
 ```
 
@@ -180,6 +215,10 @@ Alternative:
 ```bash
 dotnet run --project AspireShop.AppHost
 ```
+
+If you fetched Aspire Shop some other way, rerun `./scripts/bootstrap_aspire_shop.sh`
+or apply [`patches/aspire-shop-local-e2e.patch`](/home/gaurav/code-ubuntu/personal/capstone/patches/aspire-shop-local-e2e.patch)
+manually before starting it.
 
 The sample exposes these key resources:
 
@@ -332,7 +371,7 @@ If you want the pipeline to stay fully deterministic even with `.env.local` pres
 export IIRS_USE_OPENAI_AGENTS=false
 ```
 
-If OpenAI-backed runs are too slow, keep `IIRS_OPENAI_REASONING_EFFORT=low` and prefer CLI runs over Chainlit first.
+If OpenAI-backed runs are too slow, keep `IIRS_OPENAI_REASONING_EFFORT=low`, prefer CLI runs over Chainlit first, and raise `IIRS_OPENAI_TIMEOUT_SECONDS` if planner-style health checks time out.
 
 ## Configuration reference
 
@@ -356,6 +395,7 @@ OpenAI:
 - `OPENAI_API_KEY` or `IIRS_OPENAI_API_KEY`
 - `IIRS_USE_OPENAI_AGENTS`
 - `IIRS_OPENAI_BASE_URL`
+- `IIRS_OPENAI_TIMEOUT_SECONDS`
 - `IIRS_OPENAI_REASONING_EFFORT`
 - `IIRS_AGENT_MODEL`
 - `IIRS_EMBEDDING_MODEL`

@@ -53,7 +53,7 @@ The safest default is deterministic mode with no API key dependency:
 The OpenAI-backed path is optional extra credit:
 
 - Analyst, Critic, Planner, and follow-up answers can use OpenAI when enabled
-- deterministic fallback remains in place if the model call fails
+- model-enabled runs fail cleanly on timeout or invalid structured output instead of silently falling back
 
 ## Current Honest Limits
 

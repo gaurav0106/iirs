@@ -86,6 +86,29 @@ class IIRSPipeline:
     def build_alert_for_scenario(self, scenario_name: str) -> AlertPayload:
         return build_alert_for_scenario(scenario_name)
 
+    def build_live_alert(
+        self,
+        summary: str,
+        *,
+        service: str | None = None,
+        environment: str = "local-dev",
+        window_minutes: int = 10,
+        mode: str = "live-diagnosis",
+    ) -> AlertPayload:
+        timestamp = utc_now()
+        incident_suffix = timestamp.replace(":", "").replace("-", "").replace("+00:00", "Z")
+        return AlertPayload(
+            incident_id=f"live-chat-{incident_suffix}",
+            summary=summary,
+            severity="unknown",
+            service=service or "aspire-shop",
+            environment=environment,
+            started_at=timestamp,
+            window_minutes=window_minutes,
+            scenario=None,
+            labels={"source": "chat-live", "mode": mode},
+        )
+
     def load_alert(self, path: Path) -> AlertPayload:
         return AlertPayload.from_mapping(read_json(path))
 
