@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IIRS -- Intelligent Incident Response System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ============================================================ -->
+<!-- SLIDE 1: Title / Hook                                        -->
+<!-- ============================================================ -->
+<section class="slide-title">
+  <h1 class="title-main">IIRS</h1>
+  <p class="title-sub">Intelligent Incident Response System</p>
+  <p class="title-tagline">Turning microservice failures into traceable incident briefs<br>using a four-agent pipeline</p>
+  <div class="title-meta">
+    <span>Gaurav Yadav</span>
+    <span class="sep">|</span>
+    <span>Capstone 2026</span>
+  </div>
+  <aside class="notes">
+    Open by naming the four grading criteria: 3+ agents, reasoning traces, quantitative + qualitative evaluation, demo + report. Say this talk will hit each one.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 2: Testbed + Telemetry                                 -->
+<!-- ============================================================ -->
+<section>
+  <h2>Aspire Shop + Observability Stack</h2>
+  <p class="slide-lead">A realistic but bounded microservice testbed with full telemetry</p>
+
+  <div class="two-col">
+    <div class="col">
+      <h3>Service Graph</h3>
+      <div class="svc-graph">
+        <div class="svc-tier">
+          <div class="svc-node svc-node--primary">frontend</div>
+        </div>
+        <div class="svc-wire"></div>
+        <div class="svc-tier">
+          <div class="svc-node svc-node--service">catalogservice</div>
+          <div class="svc-node svc-node--service">basketservice</div>
+        </div>
+        <div class="svc-tier svc-tier--wired">
+          <div class="svc-leg"></div>
+          <div class="svc-leg"></div>
+        </div>
+        <div class="svc-tier">
+          <div class="svc-node svc-node--infra">PostgreSQL</div>
+          <div class="svc-node svc-node--infra">Redis</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <h3>Telemetry Flow</h3>
+      <div class="telem-graph">
+        <div class="telem-tier">
+          <div class="svc-node">All Aspire Services</div>
+        </div>
+        <div class="telem-wire">
+          <span class="telem-wire-label">OTLP</span>
+        </div>
+        <div class="telem-tier">
+          <div class="svc-node svc-node--primary">OTel Collector</div>
+        </div>
+        <div class="telem-wire"></div>
+        <div class="telem-tier telem-tier--backends">
+          <div class="telem-backend telem-backend--loki"><strong>Loki</strong><span>logs</span></div>
+          <div class="telem-backend telem-backend--prom"><strong>Prometheus</strong><span>metrics</span></div>
+          <div class="telem-backend telem-backend--tempo"><strong>Tempo</strong><span>traces</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <ul class="compact-list">
+    <li>Aspire provides orchestration, service discovery, health checks</li>
+    <li>Thin local patch for Linux demo reliability -- no changes to dependency structure</li>
+  </ul>
+  <aside class="notes">
+    Keep this fast. The point is grounding -- the audience needs to know what these services are and where the telemetry goes. "Logs go to Loki, metrics to Prometheus, traces to Tempo" and move on.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 3: Four-Agent Pipeline                                 -->
+<!-- ============================================================ -->
+<section>
+  <h2>Four Specialized Agents</h2>
+  <p class="slide-lead">Criterion 1: >= 3 agents with explicit contracts</p>
+
+  <div class="pipeline">
+    <div class="pipeline-step step-retriever fragment fade-up" data-fragment-index="1">
+      <div class="step-label">Retriever</div>
+      <div class="step-detail">Evidence collection<br><code>[tooling]</code></div>
+    </div>
+    <div class="pipeline-arrow fragment fade-up" data-fragment-index="2"></div>
+    <div class="pipeline-step step-analyst fragment fade-up" data-fragment-index="2">
+      <div class="step-label">Analyst</div>
+      <div class="step-detail">Ranked hypotheses<br><code>[deterministic|model]</code></div>
+    </div>
+    <div class="pipeline-arrow fragment fade-up" data-fragment-index="3"></div>
+    <div class="pipeline-step step-critic fragment fade-up" data-fragment-index="3">
+      <div class="step-label">Critic</div>
+      <div class="step-detail">Validation + safety<br><code>[deterministic|model]</code></div>
+    </div>
+    <div class="pipeline-arrow fragment fade-up" data-fragment-index="4"></div>
+    <div class="pipeline-step step-planner fragment fade-up" data-fragment-index="4">
+      <div class="step-label">Planner</div>
+      <div class="step-detail">Incident brief<br><code>[deterministic|model]</code></div>
+    </div>
+  </div>
+
+  <div class="state-flow fragment fade-up" data-fragment-index="5">
+    <code>AlertPayload</code> &rarr;
+    <code>EvidenceBundle</code> &rarr;
+    <code>Hypothesis[]</code> &rarr;
+    <code>Critique</code> &rarr;
+    <code>IncidentBrief</code>
+  </div>
+
+  <ul class="compact-list fragment fade-up" data-fragment-index="5">
+    <li>Orchestrated via LangGraph or fallback linear runner</li>
+    <li>Each agent appends structured results to shared <code>IIRSState</code></li>
+    <li>Fixed sequence makes the system testable, auditable, and inspectable</li>
+  </ul>
+  <aside class="notes">
+    This is the "why multi-agent?" slide. A single agent could guess a root cause; four agents produce evidence-linked, internally-contested, safety-bounded briefs.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 4: Retriever Deep-dive                                 -->
+<!-- ============================================================ -->
+<section>
+  <h2>Retriever: Evidence Before Reasoning</h2>
+
+  <div class="evidence-grid">
+    <div class="evidence-card">
+      <div class="evidence-icon">LOG</div>
+      <div class="evidence-label">Error Logs</div>
+      <div class="evidence-source">Loki</div>
+    </div>
+    <div class="evidence-card">
+      <div class="evidence-icon">LAT</div>
+      <div class="evidence-label">Latency Metrics</div>
+      <div class="evidence-source">Prometheus</div>
+    </div>
+    <div class="evidence-card">
+      <div class="evidence-icon">ERR</div>
+      <div class="evidence-label">Error Rate</div>
+      <div class="evidence-source">Prometheus</div>
+    </div>
+    <div class="evidence-card">
+      <div class="evidence-icon">TRC</div>
+      <div class="evidence-label">Failed Traces</div>
+      <div class="evidence-source">Tempo</div>
+    </div>
+    <div class="evidence-card">
+      <div class="evidence-icon">RUN</div>
+      <div class="evidence-label">Runbook Match</div>
+      <div class="evidence-source">Markdown</div>
+    </div>
+    <div class="evidence-card">
+      <div class="evidence-icon">SYS</div>
+      <div class="evidence-label">Runtime State</div>
+      <div class="evidence-source">Docker + ps</div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>postgres_down example:</strong> 2 Loki error logs, 2 Prometheus metrics, 2 Tempo traces, 1 runbook match, 1 change signal &mdash; 8 tool calls total
+  </div>
+
+  <ul class="compact-list">
+    <li>Always <code>[tooling]</code> mode -- no LLM speculation at this stage</li>
+    <li>Live alerts expand candidate services instead of assuming one broken component</li>
+    <li>Unhealthy services trigger targeted log tails, not flooding</li>
+  </ul>
+  <aside class="notes">
+    Concrete example. The bundle Retriever produces is what the Analyst reasons over. No model is involved yet.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 5: Analyst + Critic                                    -->
+<!-- ============================================================ -->
+<section>
+  <h2>Analyst + Critic: Contested Diagnosis</h2>
+
+  <div class="two-col">
+    <div class="col">
+      <h3>Analyst</h3>
+      <ul class="compact-list">
+        <li>3 ranked hypotheses with confidence scores</li>
+        <li>Each hypothesis cites supporting + contradicting evidence IDs</li>
+        <li>Deterministic heuristics or OpenAI Responses API (strict JSON)</li>
+      </ul>
+      <div class="example-box">
+        <div class="example-title">postgres_down output</div>
+        <ol class="example-list">
+          <li>PostgreSQL dependency outage <span class="confidence">0.93</span></li>
+          <li>Connection pool exhaustion <span class="confidence">0.46</span></li>
+          <li>Recent deploy regression <span class="confidence">0.18</span></li>
+        </ol>
+      </div>
+    </div>
+    <div class="col">
+      <h3>Critic</h3>
+      <ul class="compact-list">
+        <li>Reviews hypotheses against the same evidence</li>
+        <li>Emits findings, hallucination risks, missing data</li>
+        <li>Enforces safety notes before planner acts</li>
+      </ul>
+      <div class="example-box">
+        <div class="example-title">What Critic catches</div>
+        <ul class="example-list">
+          <li>Unsupported causal leaps</li>
+          <li>Missing corroborating signals</li>
+          <li>Approval boundary violations</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <aside class="notes">
+    If Redis is up but basketservice logs show Redis errors, Analyst says "path degraded" not "outage". Critic would flag if Analyst overclaimed.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 6: Planner                                             -->
+<!-- ============================================================ -->
+<section>
+  <h2>Planner: Actionable Incident Brief</h2>
+
+  <div class="brief-card">
+    <div class="brief-header">
+      <h3>Incident Brief: postgres_down</h3>
+      <p>PostgreSQL dependency outage. Evidence spans logs, metrics, traces, and runbook guidance for catalogservice.</p>
+    </div>
+    <div class="two-col">
+      <div class="col">
+        <h4 class="action-safe">Auto-safe</h4>
+        <ol class="action-list">
+          <li>Inspect PostgreSQL health, restart history, readiness probes</li>
+          <li>Correlate failing traces with first DB connection-refused logs</li>
+          <li>Validate recovery via 5xx rate and latency after mitigation</li>
+        </ol>
+      </div>
+      <div class="col">
+        <h4 class="action-approval">Needs Approval</h4>
+        <ol class="action-list" start="4">
+          <li>Restart or fail over PostgreSQL if confirmed down</li>
+          <li>Roll back DB connectivity config if recent change implicated</li>
+        </ol>
+      </div>
+    </div>
+    <div class="brief-footer">
+      <strong>Open questions:</strong> No unresolved data gaps in the mock scenario.
+    </div>
+  </div>
+  <aside class="notes">
+    This is where the system becomes useful to an operator. Diagnosis alone is not enough; the user needs next actions with explicit safety boundaries.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 7: Reasoning Traces                                    -->
+<!-- ============================================================ -->
+<section>
+  <h2>Agent Reasoning Traces</h2>
+  <p class="slide-lead">Criterion 2: Every run is logged and inspectable</p>
+
+  <pre><code class="language-text" data-trim>
+Retriever [tooling]:
+  8 tool calls -> 2 logs, 2 metrics, 2 traces, 1 runbook, 1 change
+    - get_error_logs       -> log.pg.connection_refused, log.pg.retry_exhausted
+    - get_latency_metrics  -> metric.pg.latency
+    - get_error_rate_metrics -> metric.pg.error_rate
+    - get_failed_traces    -> trace.pg.checkout_failure
+    - get_slow_traces      -> trace.pg.slow_checkout
+    - get_runbook          -> runbook.postgresql-troubleshooting
+    - get_recent_changes   -> change.pg.none
+    - get_runtime_states   -> (none)
+
+Analyst [deterministic]:
+  Top hypothesis "PostgreSQL dependency outage" at confidence 0.93
+
+Critic [deterministic]:
+  2 findings, 0 hallucination risks
+
+Planner [deterministic]:
+  5 triage actions, final brief produced
+  </code></pre>
+
+  <ul class="compact-list">
+    <li>JSON trace per run in <code>traces/</code> with <code>AgentRun</code> and <code>ToolCallRecord</code></li>
+    <li>Records: agent_name, timestamps, execution_mode, tool args, evidence IDs</li>
+    <li>Same format for deterministic and LLM mode</li>
+  </ul>
+  <aside class="notes">
+    The trace format makes it possible to replay, debug, and evaluate without re-running the pipeline.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 8: Evaluation                                          -->
+<!-- ============================================================ -->
+<section>
+  <h2>Quantitative + Qualitative Evaluation</h2>
+  <p class="slide-lead">Criterion 3: Measurable metrics, not just "it looks right"</p>
+
+  <div class="two-col">
+    <div class="col fragment fade-up" data-fragment-index="1">
+      <h3>Quantitative (10 runs)</h3>
+      <table class="eval-table">
+        <tr><td>Top-1 accuracy</td><td class="pass">100%</td></tr>
+        <tr><td>Top-3 accuracy</td><td class="pass">100%</td></tr>
+        <tr><td>Evidence coverage</td><td class="pass">100%</td></tr>
+        <tr><td>Action keyword match</td><td class="pass">100%</td></tr>
+        <tr><td>Fully passing runs</td><td class="pass">10/10</td></tr>
+      </table>
+    </div>
+    <div class="col fragment fade-up" data-fragment-index="2">
+      <h3>Qualitative Rubric (60 checks)</h3>
+      <table class="eval-table">
+        <tr><td>Top hyp cites >= 3 evidence</td><td class="pass">100%</td></tr>
+        <tr><td>Evidence >= 3 source types</td><td class="pass">100%</td></tr>
+        <tr><td>Critic catches >= 1 caveat</td><td class="pass">100%</td></tr>
+        <tr><td>Safety boundary explicit</td><td class="pass">100%</td></tr>
+        <tr><td>Actions evidence-grounded</td><td class="pass">100%</td></tr>
+        <tr><td>Open questions preserve gaps</td><td class="pass">100%</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="callout fragment fade-up" data-fragment-index="3">
+    <strong>LLM comparison:</strong> 100% top-1 accuracy but 75% qualitative score -- model plans use different phrasing and sometimes omit safety boundaries. Deterministic mode is the reliable evaluation baseline.
+  </div>
+  <aside class="notes">
+    The qualitative checks justify multi-agent architecture. A single-agent summarizer could match top-1 accuracy but would not naturally produce evidence-linked citations, explicit safety boundaries, or internally contested hypotheses.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 9: Demo Surface                                        -->
+<!-- ============================================================ -->
+<section>
+  <h2>Demo: Chainlit + CLI</h2>
+  <p class="slide-lead">Criterion 4: Interactive demo with report artifacts</p>
+
+  <div class="two-col">
+    <div class="col">
+      <h3>Chainlit Chat UI</h3>
+      <ul class="compact-list">
+        <li>Scenario shortcuts, natural language, alert JSON</li>
+        <li>Stage-by-stage agent handoffs visible</li>
+        <li>Follow-ups: "why?", "show me more", "then what?"</li>
+        <li>Each run writes a unique trace file</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3>CLI</h3>
+      <ul class="compact-list">
+        <li><code>iirs run --scenario postgres_down --show-trace</code></li>
+        <li><code>iirs eval --runs 5 --format markdown</code></li>
+        <li><code>iirs ask --scenario redis_down "why?"</code></li>
+        <li><code>iirs verify-live --scenario postgres_down</code></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="stats-bar fragment fade-up">
+    <div class="stat">
+      <div class="stat-value">4</div>
+      <div class="stat-label">Agents</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">62</div>
+      <div class="stat-label">Unit tests</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">2</div>
+      <div class="stat-label">Scenarios</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">6</div>
+      <div class="stat-label">Quality checks</div>
+    </div>
+  </div>
+  <aside class="notes">
+    Demo one of these live after this slide. The Chainlit UI shows stage-by-stage reasoning. The CLI eval output produced the numbers on the previous slide.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- SLIDE 10: Limitations + Future                               -->
+<!-- ============================================================ -->
+<section>
+  <h2>Strengths, Limits, and Future Work</h2>
+
+  <div class="two-col">
+    <div class="col">
+      <h3 class="col-good">Strengths</h3>
+      <ul class="compact-list">
+        <li>4 agents with explicit contracts</li>
+        <li>Full reasoning traces per incident</li>
+        <li>Quantitative + qualitative eval harness</li>
+        <li>Safety boundaries on all actions</li>
+        <li>Reproducible local demo with real telemetry</li>
+      </ul>
+    </div>
+    <div class="col">
+      <h3 class="col-limit">Current Limits</h3>
+      <ul class="compact-list">
+        <li>2 scenarios with ground-truth labels</li>
+        <li>Retriever is deterministic, not model-driven</li>
+        <li>No true service dependency graph</li>
+        <li>LLM mode less structurally predictable</li>
+        <li>Live demos subject to latency noise</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="future-work">
+    <h3>Future Work</h3>
+    <p>More scenarios (frontend overload, cascading failures) &bull; True dependency graph &bull; Model-driven retriever &bull; Visual dashboard for traces</p>
+  </div>
+
+  <p class="closing-thesis">"The multi-agent pipeline turns evidence into safer, traceable incident briefs."</p>
+  <aside class="notes">
+    End on credibility, not hype. The system is strongest as a traceable incident-analysis assistant, not a fully autonomous fixer.
+  </aside>
+</section>
+
+</div><!-- /slides -->
+</div><!-- /reveal -->
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+Reveal.initialize({
+  hash: true,
+  slideNumber: 'c/t',
+  showNotes: false,
+  transition: 'slide',
+  transitionSpeed: 'fast',
+  plugins: [RevealHighlight, RevealNotes],
+  width: 1280,
+  height: 720,
+});
+</script>
+</body>
+</html>
