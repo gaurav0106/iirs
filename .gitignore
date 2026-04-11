@@ -12,5 +12,6 @@ __pycache__/
 .playwright-cli/
 .external/
 traces/
-submission_artifacts/
+submission_artifacts/*.zip
+submission_artifacts/*.txt
 *.pyc

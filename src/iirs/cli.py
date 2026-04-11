@@ -217,7 +217,14 @@ def main(argv: list[str] | None = None) -> int:
 
         harness = EvaluationHarness.from_directory(pipeline, pipeline.settings.ground_truth_dir)
         scenario_names = args.scenario or sorted(pipeline.scenarios)
-        report = harness.evaluate_scenarios(scenario_names, runs_per_scenario=args.runs)
+        try:
+            report = harness.evaluate_scenarios(scenario_names, runs_per_scenario=args.runs)
+        except OpenAIRequestError as exc:
+            print(f"Model request failed during evaluation; stopping instead of falling back: {exc}")
+            return 1
+        except (TelemetryConfigurationError, TelemetryRequestError) as exc:
+            print(f"Telemetry failed during evaluation; stopping cleanly: {exc}")
+            return 1
 
         if args.format == "json":
             print(render_evaluation_json(report))
