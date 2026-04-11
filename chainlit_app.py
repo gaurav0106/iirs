@@ -16,7 +16,7 @@ from iirs.llm import OpenAIRequestError
 from iirs.models import ConversationTurn
 from iirs.pipeline import IIRSPipeline
 from iirs.present import render_brief_markdown
-from iirs.utils import utc_now
+from iirs.utils import unique_suffix, utc_now
 
 
 async def _stream_markdown(content: str, *, delay: float = 0.02) -> None:
@@ -197,6 +197,61 @@ def _looks_like_contextual_follow_up(text: str) -> bool:
     return normalized in follow_ups
 
 
+def _looks_like_explicit_follow_up(text: str) -> bool:
+    lowered = " ".join(text.strip().lower().split())
+    signals = (
+        "root cause",
+        "what caused",
+        "what happened",
+        "summary",
+        "recap",
+        "how sure",
+        "confidence",
+        "compare",
+        "other hypothesis",
+        "runner up",
+        "evidence",
+        "citation",
+        "proof",
+        "log",
+        "runtime state",
+        "resource state",
+        "dashboard",
+        "container",
+        "metric",
+        "trace",
+        "runbook",
+        "playbook",
+        "deploy",
+        "change",
+        "regression",
+        "configuration",
+        "what are we missing",
+        "open question",
+        "risk",
+        "approval",
+        "restart",
+        "rollback",
+        "what do i do",
+        "what should i do",
+        "what should i check",
+        "plan",
+        "when did",
+        "start time",
+        "which service",
+        "affected service",
+        "who is affected",
+        "who owns",
+        "owner",
+        "team",
+    )
+    return any(signal in lowered for signal in signals)
+
+
+def _chat_incident_suffix(timestamp: str) -> str:
+    return f"{timestamp.replace(':', '').replace('-', '').replace('+00:00', 'Z')}-{unique_suffix()}"
+
+
 def _build_freeform_alert(message: str, pipeline: IIRSPipeline):
     scenario_name = _infer_scenario_from_text(message)
     cleaned = " ".join(message.strip().split())
@@ -205,8 +260,10 @@ def _build_freeform_alert(message: str, pipeline: IIRSPipeline):
     if scenario_name is not None:
         alert = pipeline.build_alert_for_scenario(scenario_name)
         if cleaned:
+            timestamp = utc_now()
             alert.summary = cleaned
-            alert.started_at = utc_now()
+            alert.started_at = timestamp
+            alert.incident_id = f"{scenario_name}-chat-{_chat_incident_suffix(timestamp)}"
             alert.labels = {**alert.labels, "source": "chat-freeform", "mode": "scenario-triage"}
         return alert
 
@@ -233,6 +290,20 @@ def _parse_user_alert(message: str, pipeline: IIRSPipeline):
     if lowered == "redis_down":
         return pipeline.build_alert_for_scenario("redis_down")
     return _build_freeform_alert(text, pipeline)
+
+
+def _classify_user_message(message: str, pipeline: IIRSPipeline, *, has_last_state: bool):
+    if has_last_state and _looks_like_contextual_follow_up(message):
+        return "follow-up", None
+
+    alert = _parse_user_alert(message, pipeline)
+    if alert is not None:
+        return "incident", alert
+
+    if has_last_state and _looks_like_explicit_follow_up(message):
+        return "follow-up", None
+
+    return "unknown", None
 
 
 def _remember_follow_up(state, question: str, answer: str):
@@ -266,23 +337,12 @@ async def on_message(message: cl.Message) -> None:
     pipeline = cl.user_session.get("pipeline") or IIRSPipeline()
     last_state = cl.user_session.get("last_state")
 
-    if last_state is not None and _looks_like_contextual_follow_up(message.content):
-        try:
-            answer = pipeline.follow_up(message.content, last_state)
-        except OpenAIRequestError as exc:
-            await _stream_markdown(
-                "### Follow-up Stopped\n"
-                "The model request failed, so I stopped instead of falling back to a weaker answer.\n\n"
-                f"Error: `{exc}`",
-                delay=0.008,
-            )
-            return
-        cl.user_session.set("last_state", _remember_follow_up(last_state, message.content, answer))
-        await _stream_markdown(f"### Follow-up\n{answer}", delay=0.01)
-        return
-
-    alert = _parse_user_alert(message.content, pipeline)
-    if alert is None and last_state is not None:
+    message_kind, alert = _classify_user_message(
+        message.content,
+        pipeline,
+        has_last_state=last_state is not None,
+    )
+    if message_kind == "follow-up" and last_state is not None:
         try:
             answer = pipeline.follow_up(message.content, last_state)
         except OpenAIRequestError as exc:

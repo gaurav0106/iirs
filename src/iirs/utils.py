@@ -5,10 +5,15 @@ from datetime import UTC, datetime
 import json
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def unique_suffix() -> str:
+    return uuid4().hex[:8]
 
 
 def ensure_directory(path: Path) -> Path:

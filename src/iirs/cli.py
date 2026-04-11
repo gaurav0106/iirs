@@ -4,8 +4,10 @@ import argparse
 from pathlib import Path
 import sys
 
+from .backends import TelemetryConfigurationError, TelemetryRequestError
+from .config import load_settings
 from .evaluation import EvaluationHarness, render_evaluation_json, render_evaluation_markdown
-from .llm import OpenAIRequestError
+from .llm import OpenAIConfigurationError, OpenAIRequestError, build_reasoning_client
 from .live_signatures import (
     LiveSignatureHarness,
     render_live_signature_json,
@@ -138,9 +140,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    pipeline = IIRSPipeline()
+    if args.command == "llm-check":
+        try:
+            llm = build_reasoning_client(load_settings())
+        except OpenAIConfigurationError as exc:
+            print(f"LLM check failed: {exc}")
+            return 1
+        if llm is None:
+            print(
+                "OpenAI-backed reasoning is not enabled. Set OPENAI_API_KEY and leave "
+                "IIRS_USE_OPENAI_AGENTS unset or set it to true."
+            )
+            return 1
+        try:
+            message = llm.check_connection()
+        except Exception as exc:
+            print(f"LLM check failed: {exc}")
+            return 1
+        print(message)
+        return 0
 
     if args.command == "run":
+        pipeline = IIRSPipeline()
         try:
             state = _load_state_from_run_args(
                 pipeline,
@@ -150,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         except OpenAIRequestError as exc:
             print(f"Model request failed; stopping instead of falling back: {exc}")
+            return 1
+        except (TelemetryConfigurationError, TelemetryRequestError) as exc:
+            print(f"Telemetry failed; stopping cleanly: {exc}")
             return 1
 
         brief = state["incident_brief"]
@@ -165,6 +189,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ask":
+        pipeline = IIRSPipeline()
         try:
             state = _load_state_from_run_args(
                 pipeline,
@@ -176,29 +201,17 @@ def main(argv: list[str] | None = None) -> int:
         except OpenAIRequestError as exc:
             print(f"Model request failed; stopping instead of falling back: {exc}")
             return 1
+        except (TelemetryConfigurationError, TelemetryRequestError) as exc:
+            print(f"Telemetry failed; stopping cleanly: {exc}")
+            return 1
         print(f"\nTrace: {state['trace_path']}")
         if args.show_trace:
             print("\nTrace summary:")
             print(render_trace_text(state["trace_runs"]))
         return 0
 
-    if args.command == "llm-check":
-        llm = pipeline.context.llm
-        if llm is None:
-            print(
-                "OpenAI-backed reasoning is not enabled. Set OPENAI_API_KEY and leave "
-                "IIRS_USE_OPENAI_AGENTS unset or set it to true."
-            )
-            return 1
-        try:
-            message = llm.check_connection()
-        except Exception as exc:
-            print(f"LLM check failed: {exc}")
-            return 1
-        print(message)
-        return 0
-
     if args.command == "eval":
+        pipeline = IIRSPipeline()
         if args.runs < 1:
             parser.error("--runs must be at least 1.")
 
@@ -214,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
 
     if args.command == "verify-live":
+        pipeline = IIRSPipeline()
         if args.window_minutes is not None and args.window_minutes < 1:
             parser.error("--window-minutes must be at least 1.")
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -11,7 +12,7 @@ if str(SRC) not in sys.path:
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from chainlit_app import _looks_like_contextual_follow_up, _parse_user_alert
+from chainlit_app import _classify_user_message, _looks_like_contextual_follow_up, _parse_user_alert
 from iirs.config import Settings
 from iirs.pipeline import IIRSPipeline
 
@@ -41,6 +42,23 @@ class ChainlitInputParsingTests(unittest.TestCase):
         self.assertEqual(alert.scenario, "postgres_down")
         self.assertIn("catalogservice is timing out", alert.summary)
         self.assertEqual(alert.labels.get("source"), "chat-freeform")
+        self.assertTrue(alert.incident_id.startswith("postgres_down-chat-"))
+
+    def test_parse_user_alert_assigns_unique_incident_ids_for_repeated_freeform_scenarios(self) -> None:
+        with patch("chainlit_app.utc_now", return_value="2026-04-11T12:00:00+00:00"):
+            with patch("chainlit_app.unique_suffix", side_effect=["first123", "second45"]):
+                first = _parse_user_alert(
+                    "catalogservice is timing out and PostgreSQL looks down",
+                    self.pipeline,
+                )
+                second = _parse_user_alert(
+                    "catalogservice is timing out and PostgreSQL looks down",
+                    self.pipeline,
+                )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.incident_id, second.incident_id)
 
     def test_parse_user_alert_accepts_fenced_json_payload(self) -> None:
         alert = _parse_user_alert(
@@ -93,6 +111,22 @@ class ChainlitInputParsingTests(unittest.TestCase):
         self.assertEqual(alert.service, "aspire-shop")
         self.assertEqual(alert.labels.get("mode"), "live-diagnosis")
 
+    def test_parse_user_alert_assigns_unique_incident_ids_for_repeated_live_alerts(self) -> None:
+        with patch("iirs.pipeline.utc_now", return_value="2026-04-11T12:00:00+00:00"):
+            with patch("iirs.pipeline.unique_suffix", side_effect=["live1234", "live5678"]):
+                first = _parse_user_alert(
+                    "what broke in aspire shop right now?",
+                    self.pipeline,
+                )
+                second = _parse_user_alert(
+                    "what broke in aspire shop right now?",
+                    self.pipeline,
+                )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first.incident_id, second.incident_id)
+
     def test_parse_user_alert_builds_live_health_check_alert_for_generic_health_question(self) -> None:
         alert = _parse_user_alert(
             "is everything healthy or broken right now?",
@@ -142,6 +176,26 @@ class ChainlitInputParsingTests(unittest.TestCase):
 
     def test_contextual_follow_up_does_not_capture_broad_health_check(self) -> None:
         self.assertFalse(_looks_like_contextual_follow_up("is everything healthy or broken right now?"))
+
+    def test_classify_user_message_routes_explicit_follow_up_when_state_exists(self) -> None:
+        kind, alert = _classify_user_message(
+            "What is the root cause?",
+            self.pipeline,
+            has_last_state=True,
+        )
+
+        self.assertEqual(kind, "follow-up")
+        self.assertIsNone(alert)
+
+    def test_classify_user_message_keeps_parse_miss_as_new_incident_prompt(self) -> None:
+        kind, alert = _classify_user_message(
+            "checkout is slow",
+            self.pipeline,
+            has_last_state=True,
+        )
+
+        self.assertEqual(kind, "unknown")
+        self.assertIsNone(alert)
 
 
 if __name__ == "__main__":
