@@ -12,16 +12,23 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-from iirs.backends import MockTelemetryBackend, PLTHttpTelemetryBackend, QueryTemplates, build_telemetry_backend
+from iirs.backends import (
+    PLTHttpTelemetryBackend,
+    QueryTemplates,
+    TelemetryConfigurationError,
+    build_telemetry_backend,
+)
 from iirs.config import Settings
 from iirs.models import Citation, EvidenceItem
-from iirs.scenarios import build_alert_for_scenario, get_builtin_scenarios
+from tests.helpers import load_alert_fixture
 
 
 class QueryTemplateTests(unittest.TestCase):
     def test_postgres_live_queries_use_exported_job_and_catalog_route(self) -> None:
-        queries = QueryTemplates(service="catalogservice", scenario="postgres_down")
+        queries = QueryTemplates(service="catalogservice")
 
         self.assertIn('exported_job="catalogservice"', queries.latency_metrics())
         self.assertIn('http_route="/api/v1/catalog/items/type/all"', queries.latency_metrics())
@@ -35,7 +42,7 @@ class QueryTemplateTests(unittest.TestCase):
         self.assertIn("most_recent=true", queries.slow_traces())
 
     def test_redis_live_queries_use_grpc_route_regex(self) -> None:
-        queries = QueryTemplates(service="basketservice", scenario="redis_down")
+        queries = QueryTemplates(service="basketservice")
 
         self.assertIn('exported_job="basketservice"', queries.latency_metrics())
         self.assertIn('http_route=~"/BasketApi.Basket/', queries.latency_metrics())
@@ -48,8 +55,7 @@ class QueryTemplateTests(unittest.TestCase):
 
 class LiveBackendTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.alert = build_alert_for_scenario("postgres_down")
-        self.scenario = get_builtin_scenarios()["postgres_down"]
+        self.alert = load_alert_fixture("postgres_down")
 
     def test_live_backend_parses_prometheus_loki_and_tempo(self) -> None:
         seen_requests: list[tuple[str, str]] = []
@@ -130,9 +136,9 @@ class LiveBackendTests(unittest.TestCase):
             client=client,
         )
 
-        logs = backend.get_error_logs(self.alert, self.scenario)
-        latency = backend.get_latency_metrics(self.alert, self.scenario)
-        failed_traces = backend.get_failed_traces(self.alert, self.scenario)
+        logs = backend.get_error_logs(self.alert)
+        latency = backend.get_latency_metrics(self.alert)
+        failed_traces = backend.get_failed_traces(self.alert)
 
         self.assertEqual(len(logs.items), 1)
         self.assertEqual(logs.items[0].citations[0].source_type, "loki")
@@ -142,22 +148,20 @@ class LiveBackendTests(unittest.TestCase):
         self.assertEqual(failed_traces.items[0].metadata["trace_id"], "abc123")
         self.assertIn(("tempo.test", "/api/search"), seen_requests)
 
-    def test_backend_factory_falls_back_when_requested(self) -> None:
+    def test_backend_factory_requires_plt_configuration(self) -> None:
         settings = Settings(
             trace_dir=ROOT / "traces" / "test-output",
             runbooks_dir=ROOT / "runbooks",
             fixtures_dir=ROOT / "fixtures" / "alerts",
             prefer_langgraph=False,
             telemetry_backend="plt",
-            allow_backend_fallback=True,
             prometheus_base_url=None,
             loki_base_url=None,
             tempo_base_url=None,
         )
 
-        backend = build_telemetry_backend(settings)
-
-        self.assertIsInstance(backend, MockTelemetryBackend)
+        with self.assertRaises(TelemetryConfigurationError):
+            build_telemetry_backend(settings)
 
     def test_runtime_states_include_host_processes_and_missing_services(self) -> None:
         class Completed:

@@ -8,10 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from iirs.config import Settings
 from iirs.llm import OpenAIConfigurationError, OpenAIRequestError, build_reasoning_client
 from iirs.pipeline import IIRSPipeline
+from tests.helpers import StaticScenarioTelemetryBackend, load_alert_fixture
 
 
 class FakeReasoningClient:
@@ -113,15 +116,21 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
             trace_dir=self.trace_dir,
             runbooks_dir=ROOT / "runbooks",
             fixtures_dir=ROOT / "fixtures" / "alerts",
-            ground_truth_dir=ROOT / "fixtures" / "ground_truth",
             prefer_langgraph=False,
             openai_enabled=False,
         )
 
-    def test_pipeline_uses_injected_reasoning_client(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FakeReasoningClient())
+    def _load_alert(self, name: str):
+        return load_alert_fixture(name)
 
-        state = pipeline.run_scenario("postgres_down")
+    def test_pipeline_uses_injected_reasoning_client(self) -> None:
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FakeReasoningClient(),
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
+
+        state = pipeline.run(self._load_alert("postgres_down"))
 
         self.assertEqual(state["incident_brief"].probable_root_causes[0].title, "PostgreSQL dependency outage")
         self.assertEqual(state["incident_brief"].title, "Incident Brief: postgres_down")
@@ -137,7 +146,6 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
             trace_dir=self.trace_dir,
             runbooks_dir=ROOT / "runbooks",
             fixtures_dir=ROOT / "fixtures" / "alerts",
-            ground_truth_dir=ROOT / "fixtures" / "ground_truth",
             prefer_langgraph=False,
             openai_enabled=True,
             openai_api_key=None,
@@ -147,52 +155,68 @@ class OpenAIAgentIntegrationTests(unittest.TestCase):
             build_reasoning_client(enabled_settings)
 
     def test_pipeline_raises_when_analyst_times_out(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingAnalystReasoningClient())
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FailingAnalystReasoningClient(),
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
 
         with self.assertRaises(OpenAIRequestError):
-            pipeline.run_scenario("postgres_down")
+            pipeline.run(self._load_alert("postgres_down"))
 
     def test_pipeline_raises_when_critic_times_out(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingCriticReasoningClient())
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FailingCriticReasoningClient(),
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
 
         with self.assertRaises(OpenAIRequestError):
-            pipeline.run_scenario("postgres_down")
+            pipeline.run(self._load_alert("postgres_down"))
 
     def test_pipeline_raises_when_planner_times_out(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingPlannerReasoningClient())
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FailingPlannerReasoningClient(),
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
 
         with self.assertRaises(OpenAIRequestError):
-            pipeline.run_scenario("postgres_down")
+            pipeline.run(self._load_alert("postgres_down"))
 
     def test_follow_up_raises_when_model_fails(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings, reasoning_client=FailingFollowUpReasoningClient())
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FailingFollowUpReasoningClient(),
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
 
-        state = pipeline.run_scenario("postgres_down")
+        state = pipeline.run(self._load_alert("postgres_down"))
         with self.assertRaises(OpenAIRequestError):
             pipeline.follow_up("What is the root cause?", state)
 
     def test_deterministic_follow_up_handles_confidence_question(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings)
+        pipeline = IIRSPipeline(settings=self.settings, telemetry_backend=StaticScenarioTelemetryBackend())
 
-        state = pipeline.run_scenario("postgres_down")
+        state = pipeline.run(self._load_alert("postgres_down"))
         follow_up = pipeline.follow_up("How sure are we?", state)
 
         self.assertIn("Top hypothesis", follow_up)
         self.assertIn("confidence", follow_up.lower())
 
     def test_deterministic_follow_up_handles_change_question(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings)
+        pipeline = IIRSPipeline(settings=self.settings, telemetry_backend=StaticScenarioTelemetryBackend())
 
-        state = pipeline.run_scenario("postgres_down")
+        state = pipeline.run(self._load_alert("postgres_down"))
         follow_up = pipeline.follow_up("Did a deploy cause this?", state)
 
         self.assertIn("Current change evidence", follow_up)
         self.assertIn("change.pg.none", follow_up)
 
     def test_deterministic_follow_up_prioritizes_first_steps(self) -> None:
-        pipeline = IIRSPipeline(settings=self.settings)
+        pipeline = IIRSPipeline(settings=self.settings, telemetry_backend=StaticScenarioTelemetryBackend())
 
-        state = pipeline.run_scenario("redis_down")
+        state = pipeline.run(self._load_alert("redis_down"))
         follow_up = pipeline.follow_up("What should I do first?", state)
 
         self.assertIn("Start here", follow_up)

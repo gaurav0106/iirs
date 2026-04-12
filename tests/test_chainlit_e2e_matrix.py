@@ -15,6 +15,7 @@ from chainlit_app import _parse_user_alert
 from iirs.config import Settings
 from iirs.models import Citation, EvidenceItem, ToolResult
 from iirs.pipeline import IIRSPipeline
+from tests.helpers import NoopTelemetryBackend
 
 
 class ScenarioMatrixTelemetryBackend:
@@ -51,22 +52,22 @@ class ScenarioMatrixTelemetryBackend:
             ],
         )
 
-    def get_error_logs(self, alert, scenario):
+    def get_error_logs(self, alert):
         return ToolResult(query=f"logs:{alert.service}", items=[])
 
-    def get_latency_metrics(self, alert, scenario):
+    def get_latency_metrics(self, alert):
         return ToolResult(query=f"latency:{alert.service}", items=[])
 
-    def get_error_rate_metrics(self, alert, scenario):
+    def get_error_rate_metrics(self, alert):
         return ToolResult(query=f"errors:{alert.service}", items=[])
 
-    def get_failed_traces(self, alert, scenario):
+    def get_failed_traces(self, alert):
         return ToolResult(query=f"failed-traces:{alert.service}", items=[])
 
-    def get_slow_traces(self, alert, scenario):
+    def get_slow_traces(self, alert):
         return ToolResult(query=f"slow-traces:{alert.service}", items=[])
 
-    def get_recent_changes(self, alert, scenario):
+    def get_recent_changes(self, alert):
         return ToolResult(query=f"changes:{alert.service}", items=[])
 
     def get_runtime_log_tails(self, alert, runtime_items):
@@ -156,10 +157,10 @@ class ChainlitE2EMatrixTests(unittest.TestCase):
                 trace_dir=self.trace_dir,
                 runbooks_dir=ROOT / "runbooks",
                 fixtures_dir=ROOT / "fixtures" / "alerts",
-                ground_truth_dir=ROOT / "fixtures" / "ground_truth",
                 prefer_langgraph=False,
                 openai_enabled=False,
-            )
+            ),
+            telemetry_backend=NoopTelemetryBackend(),
         )
 
     def test_basic_start_stop_prompt_matrix(self) -> None:

@@ -24,7 +24,6 @@ class LiveSignatureHarnessTests(unittest.TestCase):
             trace_dir=ROOT / "traces" / "live-signature-output",
             runbooks_dir=ROOT / "runbooks",
             fixtures_dir=ROOT / "fixtures" / "alerts",
-            ground_truth_dir=ROOT / "fixtures" / "ground_truth",
             live_signature_dir=ROOT / "fixtures" / "live_signatures",
             prefer_langgraph=False,
             telemetry_backend="plt",
@@ -118,7 +117,7 @@ class LiveSignatureHarnessTests(unittest.TestCase):
         pipeline.context.telemetry = build_telemetry_backend(self.settings, client=client)
         harness = LiveSignatureHarness.from_directory(pipeline, self.settings.live_signature_dir)
 
-        report = harness.validate_scenarios(["postgres_down"], started_at="2026-04-06T12:00:00Z")
+        report = harness.validate_profiles(["postgres_down"], started_at="2026-04-06T12:00:00Z")
 
         self.assertTrue(report.passed)
         self.assertEqual(report.passed_checks, 5)
@@ -141,11 +140,11 @@ class LiveSignatureHarnessTests(unittest.TestCase):
         pipeline.context.telemetry = build_telemetry_backend(self.settings, client=client)
         harness = LiveSignatureHarness.from_directory(pipeline, self.settings.live_signature_dir)
 
-        report = harness.validate_scenarios(["redis_down"], started_at="2026-04-06T12:00:00Z")
+        report = harness.validate_profiles(["redis_down"], started_at="2026-04-06T12:00:00Z")
 
         self.assertFalse(report.passed)
         self.assertEqual(report.passed_checks, 0)
-        self.assertTrue(all(not check.satisfied for check in report.scenario_reports[0].check_results))
+        self.assertTrue(all(not check.satisfied for check in report.profile_reports[0].check_results))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from iirs.backends import TelemetryConfigurationError, TelemetryRequestError
 from iirs.cli import main
@@ -29,15 +31,25 @@ class FakePipeline:
         self.loaded_alert_path = None
         self.last_question = None
 
-    def run_scenario(self, name):
-        return self._state(name)
-
     def load_alert(self, path):
         self.loaded_alert_path = path
         return "loaded-alert"
 
+    def build_live_alert(self, summary, *, service=None, environment="local-dev", window_minutes=10, mode="live-diagnosis", source="cli-live"):
+        return AlertPayload(
+            incident_id="live-1",
+            summary=summary,
+            severity="critical",
+            service=service or "catalogservice",
+            environment=environment,
+            started_at="2026-04-11T00:00:00Z",
+            window_minutes=window_minutes,
+            scenario=None,
+            labels={"source": source, "mode": mode},
+        )
+
     def run(self, alert):
-        return self._state("loaded")
+        return self._state("live")
 
     def follow_up(self, question, state):
         self.last_question = question
@@ -88,13 +100,13 @@ class FakePipeline:
                 service="catalogservice",
                 environment="local-dev",
                 started_at="2026-04-11T00:00:00Z",
-                scenario=scenario_name,
+                scenario=None,
             ),
         }
 
 
 class FailingRunPipeline(FakePipeline):
-    def run_scenario(self, name):
+    def run(self, alert):
         raise OpenAIRequestError("The read operation timed out")
 
 
@@ -104,7 +116,7 @@ class FailingFollowUpPipeline(FakePipeline):
 
 
 class TelemetryFailingRunPipeline(FakePipeline):
-    def run_scenario(self, name):
+    def run(self, alert):
         raise TelemetryRequestError("loki query failed: timed out")
 
 
@@ -119,7 +131,7 @@ class CLITests(unittest.TestCase):
         pipeline = FakePipeline()
         with patch("iirs.cli.IIRSPipeline", return_value=pipeline):
             with redirect_stdout(stdout):
-                rc = main(["ask", "--scenario", "postgres_down", "How sure are we?"])
+                rc = main(["ask", "--summary", "catalogservice is timing out and PostgreSQL looks down", "How sure are we?"])
 
         output = stdout.getvalue()
         self.assertEqual(rc, 0)
@@ -152,7 +164,7 @@ class CLITests(unittest.TestCase):
         stdout = io.StringIO()
         with patch("iirs.cli.IIRSPipeline", return_value=FailingRunPipeline()):
             with redirect_stdout(stdout):
-                rc = main(["run", "--scenario", "postgres_down"])
+                rc = main(["run", "--summary", "catalogservice is timing out and PostgreSQL looks down"])
 
         self.assertEqual(rc, 1)
         self.assertIn("Model request failed; stopping instead of falling back", stdout.getvalue())
@@ -161,7 +173,7 @@ class CLITests(unittest.TestCase):
         stdout = io.StringIO()
         with patch("iirs.cli.IIRSPipeline", return_value=TelemetryFailingRunPipeline()):
             with redirect_stdout(stdout):
-                rc = main(["run", "--scenario", "postgres_down"])
+                rc = main(["run", "--summary", "catalogservice is timing out and PostgreSQL looks down"])
 
         self.assertEqual(rc, 1)
         self.assertIn("Telemetry failed; stopping cleanly", stdout.getvalue())
@@ -170,7 +182,7 @@ class CLITests(unittest.TestCase):
         stdout = io.StringIO()
         with patch("iirs.cli.IIRSPipeline", return_value=FailingFollowUpPipeline()):
             with redirect_stdout(stdout):
-                rc = main(["ask", "--scenario", "postgres_down", "What is the root cause?"])
+                rc = main(["ask", "--summary", "catalogservice is timing out and PostgreSQL looks down", "What is the root cause?"])
 
         self.assertEqual(rc, 1)
         self.assertIn("Model request failed; stopping instead of falling back", stdout.getvalue())
@@ -179,7 +191,7 @@ class CLITests(unittest.TestCase):
         stdout = io.StringIO()
         with patch("iirs.cli.IIRSPipeline", return_value=TelemetryFailingAskPipeline()):
             with redirect_stdout(stdout):
-                rc = main(["ask", "--scenario", "postgres_down", "What is the root cause?"])
+                rc = main(["ask", "--summary", "catalogservice is timing out and PostgreSQL looks down", "What is the root cause?"])
 
         self.assertEqual(rc, 1)
         self.assertIn("Telemetry failed; stopping cleanly", stdout.getvalue())

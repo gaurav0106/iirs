@@ -108,26 +108,10 @@ class OpenAIResponsesReasoner:
             },
             ["summary", "hypotheses"],
         )
-        system_prompt = (
-            "You are the IIRS Analyst agent. Act like a pragmatic incident responder, not a report generator. "
-            "Rank likely root causes using only the provided alert and evidence. "
-            "Every evidence reference must use one of the provided evidence IDs. "
-            "Prefer direct dependency failures and explicit runtime-state evidence over vague circumstantial theories. "
-            "If the evidence is mixed, lower confidence instead of forcing certainty. "
-            "Prefer short canonical titles. If the evidence clearly shows PostgreSQL is unavailable, use the title "
-            "'PostgreSQL dependency outage'. If it clearly shows Redis is unavailable, use the title "
-            "'Redis dependency outage'. If a service shows dependency-specific failures but runtime state does not "
-            "clearly prove the dependency is down, use a title like "
-            "'catalogservice to PostgreSQL dependency path degraded' or "
-            "'basketservice to Redis dependency path degraded'. If alert.labels.mode is 'live-health-check' and core runtime "
-            "resources are still running, prefer 'No clear live fault detected' as the top hypothesis and keep speculative "
-            "degradations secondary unless there is direct current failure evidence. If multiple independent resources are explicitly down, use the title "
-            "'Multiple service outages in Aspire Shop'. Keep the response concise."
-        )
         return self._structured_response(
             schema_name="iirs_analyst_response",
             schema=schema,
-            system_prompt=system_prompt,
+            system_prompt=self._analyst_system_prompt(),
             user_prompt=self._analyst_prompt(state),
         )
 
@@ -161,15 +145,10 @@ class OpenAIResponsesReasoner:
                 "findings",
             ],
         )
-        system_prompt = (
-            "You are the IIRS Critic agent. Validate that the analyst output is evidence-grounded, conservative, "
-            "and operationally sane. Flag weak support, missing data, approval boundaries, or risky leaps. "
-            "Use only provided evidence IDs. Keep lists short and avoid repeating the same point."
-        )
         return self._structured_response(
             schema_name="iirs_critic_response",
             schema=schema,
-            system_prompt=system_prompt,
+            system_prompt=self._critic_system_prompt(),
             user_prompt=self._critic_prompt(state),
         )
 
@@ -205,34 +184,16 @@ class OpenAIResponsesReasoner:
                 "steps",
             ],
         )
-        system_prompt = (
-            "You are the IIRS Planner agent. Produce a concise incident brief and a triage plan that is actually useful "
-            "under pressure. Start with the highest-value checks, avoid filler, and keep the steps concrete. "
-            "If runtime-state evidence names specific exited or unhealthy resources, name those resources directly in the plan. "
-            "If the top hypothesis is 'No clear live fault detected', keep the brief in health-check mode and avoid restarts, rollbacks, "
-            "or other state-changing steps unless fresh evidence shows a concrete failing resource. "
-            "Mark read-only diagnostic actions as 'auto-safe'. Mark any state-changing actions such as restarts, "
-            "failover, rollback, or traffic changes as 'needs-approval'. Use only provided evidence IDs. "
-            "Keep the plan concise."
-        )
         return self._structured_response(
             schema_name="iirs_planner_response",
             schema=schema,
-            system_prompt=system_prompt,
+            system_prompt=self._planner_system_prompt(),
             user_prompt=self._planner_prompt(state),
         )
 
     def answer_follow_up(self, question: str, state: IIRSState) -> str:
-        system_prompt = (
-            "You are the IIRS follow-up assistant. Answer the user's actual question from the provided incident state. "
-            "Be direct, pragmatic, and concise. Handle indirect or skeptical questions normally. "
-            "Use recent conversation messages to resolve references like 'that', 'it', 'why?', or 'then what?' and keep continuity across the last few turns. "
-            "If the state does not contain an answer, say so plainly instead of guessing. "
-            "When useful, separate what is known, what is uncertain, and what should happen next. "
-            "Cite evidence IDs inline when that helps."
-        )
         return self._text_response(
-            system_prompt=system_prompt,
+            system_prompt=self._follow_up_system_prompt(),
             user_prompt=self._follow_up_prompt(question, state),
             max_output_tokens=500,
         )
@@ -250,12 +211,95 @@ class OpenAIResponsesReasoner:
             max_output_tokens=60,
         )
 
+    def _analyst_system_prompt(self) -> str:
+        return "\n".join(
+            [
+                "You are the IIRS Analyst agent.",
+                "Act like a pragmatic incident responder, not a report generator.",
+                "Output must match the provided JSON schema exactly.",
+                "Operating rules:",
+                "1. Rank likely root causes using only the provided alert and evidence; never invent services, resources, or evidence IDs.",
+                "2. Prefer direct dependency or runtime-state failures over vague downstream symptoms and stale circumstantial clues.",
+                "3. Use canonical titles when they fit exactly: PostgreSQL dependency outage, Redis dependency outage, Multiple service outages in Aspire Shop, and No clear live fault detected.",
+                "4. If a service shows dependency-specific failures but runtime state does not prove the dependency is down, use a dependency path degraded title instead of claiming a hard outage.",
+                "5. If alert.labels.mode is live-health-check and core runtime resources are still running, prefer No clear live fault detected at rank 1 unless there is direct current failure evidence.",
+                "6. If runtime state shows a concrete service missing, exited, or unhealthy, rank that service unavailable first and treat frontend/UI bug theories as downstream impact unless frontend itself is the failing resource.",
+                "7. If rank 1 is No clear live fault detected, keep ranks 2 and 3 generic unless current runtime evidence directly proves a specific resource or dependency is unhealthy; do not fill lower ranks with PostgreSQL or Redis theories just because there is weak stale noise.",
+                "8. Keep recent deploy or config-regression theories as low-confidence fallbacks unless the evidence explicitly points there.",
+                "9. Be conservative with confidence: reserve high confidence for direct outage proof plus supporting telemetry, and lower confidence when evidence is mixed or indirect.",
+                "10. On the top hypothesis, cite the strongest 3-4 evidence IDs when available and try to span multiple evidence channels.",
+                "11. Keep titles short and canonical, and keep next_checks concrete and read-only.",
+            ]
+        )
+
+    def _critic_system_prompt(self) -> str:
+        return "\n".join(
+            [
+                "You are the IIRS Critic agent.",
+                "Output must match the provided JSON schema exactly.",
+                "Validate that the analyst output is evidence-grounded, conservative, and operationally sane.",
+                "Operating rules:",
+                "1. Use only the provided evidence and evidence IDs; never fill gaps with invented proof.",
+                "2. Treat narrow source coverage, missing traces, missing change data, or high confidence without direct runtime proof as material caveats.",
+                "3. If evidence is thin or mixed, surface at least one concrete risk, missing-data note, or warning instead of rubber-stamping the analysis.",
+                "4. Keep relevant_evidence_ids focused on the strongest evidence behind the current top hypothesis.",
+                "5. Keep findings short, specific, and non-overlapping.",
+                "6. Make approval boundaries explicit: read-only checks are safe, but restarts, failover, rollback, reconfiguration, or traffic changes need approval.",
+            ]
+        )
+
+    def _planner_system_prompt(self) -> str:
+        return "\n".join(
+            [
+                "You are the IIRS Planner agent.",
+                "Output must match the provided JSON schema exactly.",
+                "Produce a concise incident brief and triage plan that is useful under pressure.",
+                "Operating rules:",
+                "1. Keep the brief aligned with the top hypothesis and cited evidence; do not introduce a new diagnosis.",
+                "2. Keep brief_title short and incident-style, typically starting with Incident Brief:.",
+                "3. Put auto-safe diagnostic steps first, then needs-approval remediation only if the fault remains confirmed.",
+                "4. Mark read-only checks as auto-safe. Mark any restart, failover, rollback, reconfiguration, or traffic change as needs-approval.",
+                "5. If the evidence points to PostgreSQL or Redis, name that dependency directly in the brief and step descriptions with concrete wording like Inspect PostgreSQL health or Restart or fail over PostgreSQL.",
+                "6. If runtime-state evidence names specific exited or unhealthy resources, mention those resources directly in the brief summary or steps.",
+                "7. If the top hypothesis is No clear live fault detected, stay in health-check mode and avoid restarts, rollbacks, or failover unless fresh evidence shows a concrete failing resource.",
+                "8. Copy each item from critique.missing_data into open_questions verbatim before adding any new question.",
+                "9. evidence_snapshot should restate the most decision-useful retrieved evidence, not generic observations.",
+                "10. Keep the plan concise and concrete: inspect, correlate, validate recovery, then approval-gated remediation if needed.",
+            ]
+        )
+
+    def _follow_up_system_prompt(self) -> str:
+        return "\n".join(
+            [
+                "You are the IIRS follow-up assistant.",
+                "Answer the user's actual question from the provided incident state.",
+                "Operating rules:",
+                "1. Be direct, pragmatic, and concise.",
+                "2. Use recent conversation messages to resolve references like that, it, why, or then what and keep continuity across the last few turns.",
+                "3. Prefer the current incident brief, hypotheses, critique, and cited evidence over generic advice.",
+                "4. If the state does not contain the answer, say so plainly instead of guessing.",
+                "5. When useful, separate what is known, what is uncertain, and what should happen next.",
+                "6. Cite evidence IDs inline when they materially support the answer.",
+                "7. If the user asks what to do first, prioritize auto-safe steps before approval-required actions.",
+            ]
+        )
+
     def _analyst_prompt(self, state: IIRSState) -> str:
         payload = {
             "alert": to_jsonable(state["alert"]),
             "evidence_bundle": self._serialize_evidence_bundle(state["evidence_bundle"]),
         }
-        return "Analyze this incident and rank likely root causes.\n" + json.dumps(payload, indent=2)
+        return self._task_prompt(
+            title="Analyze this incident and rank likely root causes.",
+            checklist=[
+                "Review the alert before judging the evidence.",
+                "Prefer runtime-state proof and direct dependency failures over broad service symptoms.",
+                "Use only evidence IDs from evidence_bundle.items[*].id.",
+                "Use contradicting_evidence_ids only for evidence that genuinely weakens a hypothesis.",
+                "If evidence is thin, lower confidence instead of inventing certainty.",
+            ],
+            payload=payload,
+        )
 
     def _critic_prompt(self, state: IIRSState) -> str:
         payload = {
@@ -263,7 +307,16 @@ class OpenAIResponsesReasoner:
             "evidence_bundle": self._serialize_evidence_bundle(state["evidence_bundle"]),
             "hypotheses": [self._serialize_hypothesis(item) for item in state["hypotheses"]],
         }
-        return "Critique this incident analysis.\n" + json.dumps(payload, indent=2)
+        return self._task_prompt(
+            title="Critique this incident analysis.",
+            checklist=[
+                "Check whether the top hypothesis is backed by strong cited evidence.",
+                "Call out missing traces, missing change data, or narrow source coverage when they matter.",
+                "Surface risky leaps or overconfidence instead of approving by default.",
+                "Use only evidence IDs from the payload.",
+            ],
+            payload=payload,
+        )
 
     def _planner_prompt(self, state: IIRSState) -> str:
         payload = {
@@ -272,7 +325,17 @@ class OpenAIResponsesReasoner:
             "hypotheses": [self._serialize_hypothesis(item) for item in state["hypotheses"]],
             "critique": self._serialize_critique(state["critique"]),
         }
-        return "Create the final incident brief and triage plan.\n" + json.dumps(payload, indent=2)
+        return self._task_prompt(
+            title="Create the final incident brief and triage plan.",
+            checklist=[
+                "Carry forward the current diagnosis instead of inventing a new one.",
+                "Copy critique.missing_data into open_questions before adding anything else.",
+                "Start with auto-safe inspect or correlate steps, then validate recovery.",
+                "Add needs-approval steps only for state-changing actions.",
+                "Every step must cite the evidence IDs that justify it.",
+            ],
+            payload=payload,
+        )
 
     def _follow_up_prompt(self, question: str, state: IIRSState) -> str:
         payload = {
@@ -292,7 +355,27 @@ class OpenAIResponsesReasoner:
                 for run in state.get("trace_runs", [])
             ],
         }
-        return json.dumps(payload, indent=2)
+        return self._task_prompt(
+            title="Answer the user's follow-up question from the current incident state.",
+            checklist=[
+                "Use the question and the latest incident state together.",
+                "Prefer cited evidence and the current incident brief over speculation.",
+                "If the state is incomplete, say what is missing.",
+            ],
+            payload=payload,
+        )
+
+    def _task_prompt(
+        self,
+        *,
+        title: str,
+        checklist: list[str],
+        payload: dict[str, Any],
+    ) -> str:
+        lines = [title, "", "Execution checklist:"]
+        lines.extend(f"{index}. {item}" for index, item in enumerate(checklist, start=1))
+        lines.extend(["", "Payload JSON:", json.dumps(payload, indent=2)])
+        return "\n".join(lines)
 
     def _serialize_evidence_bundle(self, bundle: EvidenceBundle) -> dict[str, Any]:
         return {

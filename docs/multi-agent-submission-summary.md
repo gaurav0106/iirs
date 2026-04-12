@@ -9,7 +9,7 @@ IIRS is a local incident-response assistant centered on a four-stage agent pipel
 3. `Critic`: checks whether the analysis is grounded, conservative, and safe.
 4. `Planner`: turns the reviewed analysis into an incident brief and triage plan.
 
-The app surface is not the main contribution. The core contribution is the agent pipeline, shared state, reasoning traces, and evaluation workflow.
+The app surface is not the main contribution. The core contribution is the agent pipeline, shared state, and reasoning traces.
 
 ## Why This Counts As A Multi-Agent System
 
@@ -29,9 +29,9 @@ Use the CLI first. It is the cleanest proof of the multi-agent system.
 Recommended sequence:
 
 1. `./.venv/bin/python -m unittest discover -s tests`
-2. `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs eval --runs 2`
-3. `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario postgres_down --show-trace`
-4. `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario redis_down --show-trace`
+2. `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace`
+3. `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --alert-file fixtures/alerts/redis_down.json --show-trace`
+4. `./.venv/bin/iirs verify-live --profile postgres_down`
 
 What the evaluator should notice:
 
@@ -39,15 +39,13 @@ What the evaluator should notice:
 - per-agent trace output instead of one undifferentiated answer
 - evidence-linked hypotheses and actions
 - safety split between read-only diagnostics and approval-required changes
-- quantitative accuracy plus qualitative review scoring
 
 ## Strongest Submission Story
 
 The safest default is deterministic mode with no API key dependency:
 
 - tests pass locally
-- built-in scenarios are reproducible
-- evaluation reports are stable
+- alert fixtures are reproducible
 - trace files are generated automatically
 
 The OpenAI-backed path is optional extra credit:
@@ -69,8 +67,8 @@ Fallback sequence:
 
 1. State that the live fault reproduction succeeded but one backend check is noisy.
 2. Show the saved live rehearsal output from `submission_artifacts/rehearsal_agent_live_postgres.txt`.
-3. Then run the deterministic scenario live:
-   `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario postgres_down --show-trace`
+3. Then run the deterministic alert-fixture demo live:
+   `IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace`
 
 That still demonstrates the actual multi-agent system clearly:
 

@@ -1,5 +1,10 @@
 {
-  "scenario_name": "postgres_down",
+  "profile_name": "postgres_down",
+  "service": "catalogservice",
+  "summary": "catalogservice is returning 5xx responses after losing PostgreSQL connectivity.",
+  "severity": "critical",
+  "environment": "local-dev",
+  "window_minutes": 15,
   "checks": [
     {
       "description": "Loki returned catalogservice error logs",

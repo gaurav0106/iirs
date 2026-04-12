@@ -6,13 +6,13 @@ import sys
 
 from .backends import TelemetryConfigurationError, TelemetryRequestError
 from .config import load_settings
-from .evaluation import EvaluationHarness, render_evaluation_json, render_evaluation_markdown
 from .llm import OpenAIConfigurationError, OpenAIRequestError, build_reasoning_client
 from .live_signatures import (
     LiveSignatureHarness,
     render_live_signature_json,
     render_live_signature_markdown,
 )
+from .models import AlertPayload
 from .pipeline import IIRSPipeline
 from .present import render_brief_json, render_brief_markdown, render_trace_text
 
@@ -21,16 +21,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the IIRS demo pipeline.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run_parser = subparsers.add_parser("run", help="Run a scenario or alert payload through IIRS.")
-    run_parser.add_argument(
-        "--scenario",
-        choices=["postgres_down", "redis_down"],
-        help="Built-in incident scenario to execute.",
-    )
+    run_parser = subparsers.add_parser("run", help="Run an alert payload or live summary through IIRS.")
     run_parser.add_argument(
         "--alert-file",
         type=Path,
         help="Path to an alert payload JSON file.",
+    )
+    run_parser.add_argument(
+        "--summary",
+        help="Plain-English incident summary for a live alert.",
+    )
+    run_parser.add_argument(
+        "--service",
+        help="Service to target when using --summary. Defaults to aspire-shop.",
+    )
+    run_parser.add_argument(
+        "--environment",
+        help="Environment label when using --summary. Defaults to local-dev.",
+    )
+    run_parser.add_argument(
+        "--window-minutes",
+        type=int,
+        help="Alert window in minutes when using --summary. Defaults to 10.",
+    )
+    run_parser.add_argument(
+        "--mode",
+        choices=["live-diagnosis", "live-health-check"],
+        help="Alert mode when using --summary. Defaults to live-diagnosis.",
     )
     run_parser.add_argument(
         "--format",
@@ -46,17 +63,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     ask_parser = subparsers.add_parser(
         "ask",
-        help="Run a scenario or alert and ask a follow-up question against the resulting incident state.",
-    )
-    ask_parser.add_argument(
-        "--scenario",
-        choices=["postgres_down", "redis_down"],
-        help="Built-in incident scenario to execute.",
+        help="Run an alert payload or live summary and ask a follow-up question against the resulting incident state.",
     )
     ask_parser.add_argument(
         "--alert-file",
         type=Path,
         help="Path to an alert payload JSON file.",
+    )
+    ask_parser.add_argument(
+        "--summary",
+        help="Plain-English incident summary for a live alert.",
+    )
+    ask_parser.add_argument(
+        "--service",
+        help="Service to target when using --summary. Defaults to aspire-shop.",
+    )
+    ask_parser.add_argument(
+        "--environment",
+        help="Environment label when using --summary. Defaults to local-dev.",
+    )
+    ask_parser.add_argument(
+        "--window-minutes",
+        type=int,
+        help="Alert window in minutes when using --summary. Defaults to 10.",
+    )
+    ask_parser.add_argument(
+        "--mode",
+        choices=["live-diagnosis", "live-health-check"],
+        help="Alert mode when using --summary. Defaults to live-diagnosis.",
     )
     ask_parser.add_argument(
         "--show-trace",
@@ -68,40 +102,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Follow-up question to ask about the resulting incident state.",
     )
 
-    llm_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "llm-check",
         help="Verify that the configured OpenAI-backed reasoning client is reachable.",
     )
 
-    eval_parser = subparsers.add_parser("eval", help="Evaluate built-in scenarios against ground-truth labels.")
-    eval_parser.add_argument(
-        "--scenario",
-        action="append",
-        choices=["postgres_down", "redis_down"],
-        help="Scenario to evaluate. Repeat to select multiple scenarios. Defaults to all built-ins.",
-    )
-    eval_parser.add_argument(
-        "--runs",
-        type=int,
-        default=3,
-        help="Number of repeated runs to execute per scenario.",
-    )
-    eval_parser.add_argument(
-        "--format",
-        choices=["markdown", "json"],
-        default="markdown",
-        help="Output format for the evaluation report.",
-    )
-
     live_parser = subparsers.add_parser(
         "verify-live",
-        help="Validate live telemetry signatures for built-in scenarios against the PLT backend.",
+        help="Validate live telemetry signatures for built-in fault profiles against the PLT backend.",
     )
     live_parser.add_argument(
-        "--scenario",
+        "--profile",
         action="append",
-        choices=["postgres_down", "redis_down"],
-        help="Scenario to validate. Repeat to select multiple scenarios. Defaults to all live signature profiles.",
+        help="Live signature profile to validate. Repeat to select multiple profiles. Defaults to all profiles.",
     )
     live_parser.add_argument(
         "--started-at",
@@ -110,7 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     live_parser.add_argument(
         "--window-minutes",
         type=int,
-        help="Override the alert time window in minutes. Defaults to the scenario fixture value.",
+        help="Override the alert time window in minutes. Defaults to the profile value.",
     )
     live_parser.add_argument(
         "--format",
@@ -122,18 +135,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load_state_from_run_args(
+def _build_alert_from_run_args(
     pipeline: IIRSPipeline,
     parser: argparse.ArgumentParser,
     *,
-    scenario: str | None,
     alert_file: Path | None,
-):
-    if bool(scenario) == bool(alert_file):
-        parser.error("Specify exactly one of --scenario or --alert-file.")
-    if scenario:
-        return pipeline.run_scenario(scenario)
-    return pipeline.run(pipeline.load_alert(alert_file))
+    summary: str | None,
+    service: str | None,
+    environment: str | None,
+    window_minutes: int | None,
+    mode: str | None,
+) -> AlertPayload:
+    if bool(summary) == bool(alert_file):
+        parser.error("Specify exactly one of --summary or --alert-file.")
+    if alert_file:
+        if any(value is not None for value in (service, environment, window_minutes, mode)):
+            parser.error("--service, --environment, --window-minutes, and --mode require --summary.")
+        return pipeline.load_alert(alert_file)
+    if window_minutes is not None and window_minutes < 1:
+        parser.error("--window-minutes must be at least 1.")
+    return pipeline.build_live_alert(
+        summary or "",
+        service=service,
+        environment=environment or "local-dev",
+        window_minutes=window_minutes or 10,
+        mode=mode or "live-diagnosis",
+        source="cli-live",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,12 +191,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         pipeline = IIRSPipeline()
         try:
-            state = _load_state_from_run_args(
+            alert = _build_alert_from_run_args(
                 pipeline,
                 parser,
-                scenario=args.scenario,
                 alert_file=args.alert_file,
+                summary=args.summary,
+                service=args.service,
+                environment=args.environment,
+                window_minutes=args.window_minutes,
+                mode=args.mode,
             )
+            state = pipeline.run(alert)
         except OpenAIRequestError as exc:
             print(f"Model request failed; stopping instead of falling back: {exc}")
             return 1
@@ -191,12 +224,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "ask":
         pipeline = IIRSPipeline()
         try:
-            state = _load_state_from_run_args(
+            alert = _build_alert_from_run_args(
                 pipeline,
                 parser,
-                scenario=args.scenario,
                 alert_file=args.alert_file,
+                summary=args.summary,
+                service=args.service,
+                environment=args.environment,
+                window_minutes=args.window_minutes,
+                mode=args.mode,
             )
+            state = pipeline.run(alert)
             print(pipeline.follow_up(args.question, state))
         except OpenAIRequestError as exc:
             print(f"Model request failed; stopping instead of falling back: {exc}")
@@ -210,38 +248,15 @@ def main(argv: list[str] | None = None) -> int:
             print(render_trace_text(state["trace_runs"]))
         return 0
 
-    if args.command == "eval":
-        pipeline = IIRSPipeline()
-        if args.runs < 1:
-            parser.error("--runs must be at least 1.")
-
-        harness = EvaluationHarness.from_directory(pipeline, pipeline.settings.ground_truth_dir)
-        scenario_names = args.scenario or sorted(pipeline.scenarios)
-        try:
-            report = harness.evaluate_scenarios(scenario_names, runs_per_scenario=args.runs)
-        except OpenAIRequestError as exc:
-            print(f"Model request failed during evaluation; stopping instead of falling back: {exc}")
-            return 1
-        except (TelemetryConfigurationError, TelemetryRequestError) as exc:
-            print(f"Telemetry failed during evaluation; stopping cleanly: {exc}")
-            return 1
-
-        if args.format == "json":
-            print(render_evaluation_json(report))
-        else:
-            print(render_evaluation_markdown(report))
-
-        return 0 if report.passed else 1
-
     if args.command == "verify-live":
         pipeline = IIRSPipeline()
         if args.window_minutes is not None and args.window_minutes < 1:
             parser.error("--window-minutes must be at least 1.")
 
         harness = LiveSignatureHarness.from_directory(pipeline, pipeline.settings.live_signature_dir)
-        scenario_names = args.scenario or sorted(harness.profiles)
-        report = harness.validate_scenarios(
-            scenario_names,
+        profile_names = args.profile or sorted(harness.profiles)
+        report = harness.validate_profiles(
+            profile_names,
             started_at=args.started_at,
             window_minutes=args.window_minutes,
         )

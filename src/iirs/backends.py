@@ -11,7 +11,6 @@ from typing import Any, TYPE_CHECKING, Protocol
 import httpx
 
 from .models import AlertPayload, Citation, EvidenceItem, ToolResult
-from .scenarios import EvidenceSeed, ScenarioDefinition
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -22,17 +21,17 @@ class TelemetryBackend(Protocol):
 
     def get_runtime_log_tails(self, alert: AlertPayload, runtime_items: list[EvidenceItem]) -> ToolResult: ...
 
-    def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_error_logs(self, alert: AlertPayload) -> ToolResult: ...
 
-    def get_latency_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_latency_metrics(self, alert: AlertPayload) -> ToolResult: ...
 
-    def get_error_rate_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_error_rate_metrics(self, alert: AlertPayload) -> ToolResult: ...
 
-    def get_failed_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_failed_traces(self, alert: AlertPayload) -> ToolResult: ...
 
-    def get_slow_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_slow_traces(self, alert: AlertPayload) -> ToolResult: ...
 
-    def get_recent_changes(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult: ...
+    def get_recent_changes(self, alert: AlertPayload) -> ToolResult: ...
 
 
 class TelemetryConfigurationError(RuntimeError):
@@ -67,12 +66,12 @@ class RuntimeResourceSpec:
 
 
 _DEFAULT_METRIC_PROFILE = LiveMetricProfile()
-_LIVE_METRIC_PROFILES: dict[tuple[str, str | None], LiveMetricProfile] = {
-    ("catalogservice", "postgres_down"): LiveMetricProfile(
+_LIVE_METRIC_PROFILES: dict[str, LiveMetricProfile] = {
+    "catalogservice": LiveMetricProfile(
         route_matcher="/api/v1/catalog/items/type/all",
         exception_error_pattern="Microsoft\\.EntityFrameworkCore\\.Storage\\.RetryLimitExceededException",
     ),
-    ("basketservice", "redis_down"): LiveMetricProfile(
+    "basketservice": LiveMetricProfile(
         route_matcher="/BasketApi.Basket/(GetBasketById|UpdateBasket|CheckoutBasket|DeleteBasket)",
         route_operator="=~",
         exception_error_pattern="StackExchange\\.Redis\\..+",
@@ -130,7 +129,6 @@ def _escape_promql_regex(pattern: str) -> str:
 @dataclass(slots=True)
 class QueryTemplates:
     service: str
-    scenario: str | None = None
 
     def error_logs(self) -> str:
         return f'{{service_name="{self.service}"}} |= "error"'
@@ -196,42 +194,32 @@ class QueryTemplates:
 
     @classmethod
     def for_alert(cls, alert: AlertPayload) -> "QueryTemplates":
-        return cls(service=alert.service, scenario=alert.scenario)
+        return cls(service=alert.service)
 
     def _metric_profile(self) -> LiveMetricProfile:
-        return _LIVE_METRIC_PROFILES.get(
-            (self.service, self.scenario),
-            _LIVE_METRIC_PROFILES.get((self.service, None), _DEFAULT_METRIC_PROFILE),
-        )
+        return _LIVE_METRIC_PROFILES.get(self.service, _DEFAULT_METRIC_PROFILE)
 
 
-def _build_evidence(
-    alert: AlertPayload,
-    seed: EvidenceSeed,
-    category: str,
-    source_type: str,
-    source: str,
-    query: str,
-) -> EvidenceItem:
-    citation = Citation(
-        id=f"{seed.id}.citation",
-        source_type=source_type,
-        source=source,
-        query=query,
-        observed_at=seed.observed_at,
-        excerpt=seed.excerpt,
-    )
-    return EvidenceItem(
-        id=seed.id,
-        category=category,
-        service=alert.service,
-        summary=seed.summary,
-        value=seed.value,
-        citations=[citation],
-        metadata=dict(seed.metadata),
-    )
-
-
+_RUNBOOK_TERMS_BY_SERVICE = {
+    "catalogservice": ("postgresql", "postgres", "database", "db"),
+    "postgres": ("postgresql", "postgres", "database", "db"),
+    "catalogdb": ("postgresql", "postgres", "database", "db"),
+    "catalogdbmanager": ("postgresql", "postgres", "database", "db"),
+    "basketservice": ("redis", "cache", "cart", "checkout"),
+    "basketcache": ("redis", "cache", "cart", "checkout"),
+    "rediscommander": ("redis", "cache", "cart", "checkout"),
+}
+def _alert_runbook_terms(alert: AlertPayload) -> list[str]:
+    terms = list(_RUNBOOK_TERMS_BY_SERVICE.get(alert.service, ()))
+    lowered = f" {alert.summary.lower()} "
+    for candidate in ("postgresql", "postgres", "database", "db", "redis", "cache", "cart", "checkout"):
+        if candidate == "db":
+            matched = " db " in lowered
+        else:
+            matched = candidate in lowered
+        if matched and candidate not in terms:
+            terms.append(candidate)
+    return terms
 def _parse_datetime(value: str) -> datetime:
     normalized = value.replace("Z", "+00:00")
     return datetime.fromisoformat(normalized).astimezone(UTC)
@@ -386,80 +374,15 @@ def _process_state_bucket(status_text: str) -> str:
     if lowered.startswith("t"):
         return "unknown"
     return "running"
-
-
-class MockTelemetryBackend:
-    def get_runtime_states(self, alert: AlertPayload, services: list[str] | None = None) -> ToolResult:
-        requested = ",".join(services or [alert.service])
-        return ToolResult(query=f"runtime:{requested}", items=[])
-
-    def get_runtime_log_tails(self, alert: AlertPayload, runtime_items: list[EvidenceItem]) -> ToolResult:
-        resources = ",".join(str(item.metadata.get("resource") or item.service) for item in runtime_items)
-        return ToolResult(query=f"runtime-log-tails:{resources}", items=[])
-
-    def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = QueryTemplates.for_alert(alert).error_logs()
-        items = [
-            _build_evidence(alert, seed, "logs", "loki", "mock-loki", query)
-            for seed in scenario.logs
-        ]
-        return ToolResult(query=query, items=items)
-
-    def get_latency_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = QueryTemplates.for_alert(alert).latency_metrics()
-        items = [
-            _build_evidence(alert, seed, "metrics", "prometheus", "mock-prometheus", query)
-            for seed in scenario.metrics
-            if seed.kind == "latency"
-        ]
-        return ToolResult(query=query, items=items)
-
-    def get_error_rate_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = QueryTemplates.for_alert(alert).error_rate_metrics()
-        items = [
-            _build_evidence(alert, seed, "metrics", "prometheus", "mock-prometheus", query)
-            for seed in scenario.metrics
-            if seed.kind == "error_rate"
-        ]
-        return ToolResult(query=query, items=items)
-
-    def get_failed_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = QueryTemplates.for_alert(alert).failed_traces()
-        items = [
-            _build_evidence(alert, seed, "traces", "tempo", "mock-tempo", query)
-            for seed in scenario.traces
-            if seed.kind == "failed_trace"
-        ]
-        return ToolResult(query=query, items=items)
-
-    def get_slow_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = QueryTemplates.for_alert(alert).slow_traces()
-        items = [
-            _build_evidence(alert, seed, "traces", "tempo", "mock-tempo", query)
-            for seed in scenario.traces
-            if seed.kind == "slow_trace"
-        ]
-        return ToolResult(query=query, items=items)
-
-    def get_recent_changes(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        query = f"service={alert.service} within={alert.window_minutes}m"
-        items = [
-            _build_evidence(alert, seed, "change_signals", "change-log", "mock-change-feed", query)
-            for seed in scenario.changes
-        ]
-        return ToolResult(query=query, items=items)
-
-
 class RunbookStore:
     def __init__(self, runbooks_dir: Path) -> None:
         self.runbooks_dir = runbooks_dir
 
-    def get_runbook(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
-        topic_terms = [
-            term
-            for term in scenario.topic.lower().split()
-            if term not in {"troubleshooting", "runbook"}
-        ]
+    def get_runbook(self, alert: AlertPayload) -> ToolResult:
+        topic_terms = _alert_runbook_terms(alert)
+        base_query = f'service="{alert.service}" summary="{alert.summary}"'
+        if not topic_terms:
+            return ToolResult(query=base_query, items=[])
         candidates: list[EvidenceItem] = []
         for path in sorted(self.runbooks_dir.glob("*.md")):
             content = path.read_text(encoding="utf-8")
@@ -467,8 +390,9 @@ class RunbookStore:
             score = sum(term in lowered for term in topic_terms)
             if score == 0:
                 continue
-            query = f'topic="{scenario.topic}"'
             excerpt = content.splitlines()[0].strip()
+            matched_topic = path.stem.replace("-", " ")
+            query = f'{base_query} matched="{matched_topic}"'
             citation = Citation(
                 id=f"runbook.{path.stem}.citation",
                 source_type="runbook",
@@ -488,7 +412,7 @@ class RunbookStore:
                     metadata={"path": str(path)},
                 )
             )
-        return ToolResult(query=f'topic="{scenario.topic}"', items=candidates[:2])
+        return ToolResult(query=query, items=candidates[:2])
 
 
 class PLTHttpTelemetryBackend:
@@ -704,7 +628,7 @@ class PLTHttpTelemetryBackend:
 
         return ToolResult(query=f"runtime-log-tails:{','.join(resources)}", items=items[:12])
 
-    def get_error_logs(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_error_logs(self, alert: AlertPayload) -> ToolResult:
         query = QueryTemplates.for_alert(alert).error_logs()
         start, end = _time_window(alert)
         payload = self._request(
@@ -748,7 +672,7 @@ class PLTHttpTelemetryBackend:
                 break
         return ToolResult(query=query, items=items)
 
-    def get_latency_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_latency_metrics(self, alert: AlertPayload) -> ToolResult:
         query = QueryTemplates.for_alert(alert).latency_metrics()
         return self._prometheus_items(
             alert,
@@ -758,7 +682,7 @@ class PLTHttpTelemetryBackend:
             summary_prefix=f"Prometheus latency signal for {alert.service}",
         )
 
-    def get_error_rate_metrics(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_error_rate_metrics(self, alert: AlertPayload) -> ToolResult:
         query = QueryTemplates.for_alert(alert).error_rate_metrics()
         return self._prometheus_items(
             alert,
@@ -768,7 +692,7 @@ class PLTHttpTelemetryBackend:
             summary_prefix=f"Prometheus error-rate signal for {alert.service}",
         )
 
-    def get_failed_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_failed_traces(self, alert: AlertPayload) -> ToolResult:
         query = QueryTemplates.for_alert(alert).failed_traces()
         return self._tempo_items(
             alert,
@@ -778,7 +702,7 @@ class PLTHttpTelemetryBackend:
             summary_prefix=f"Tempo failed trace match for {alert.service}",
         )
 
-    def get_slow_traces(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_slow_traces(self, alert: AlertPayload) -> ToolResult:
         query = QueryTemplates.for_alert(alert).slow_traces()
         return self._tempo_items(
             alert,
@@ -788,13 +712,9 @@ class PLTHttpTelemetryBackend:
             summary_prefix=f"Tempo slow trace match for {alert.service}",
         )
 
-    def get_recent_changes(self, alert: AlertPayload, scenario: ScenarioDefinition) -> ToolResult:
+    def get_recent_changes(self, alert: AlertPayload) -> ToolResult:
         query = f"service={alert.service} within={alert.window_minutes}m"
-        items = [
-            _build_evidence(alert, seed, "change_signals", "change-log", "static-change-feed", query)
-            for seed in scenario.changes
-        ]
-        return ToolResult(query=query, items=items)
+        return ToolResult(query=query, items=[])
 
     def _headers(self) -> dict[str, str]:
         if not self.tenant_id:
@@ -1033,11 +953,9 @@ class PLTHttpTelemetryBackend:
 
 def build_telemetry_backend(settings: "Settings", *, client: httpx.Client | None = None) -> TelemetryBackend:
     backend_name = settings.telemetry_backend.strip().lower()
-    if backend_name == "mock":
-        return MockTelemetryBackend()
     if backend_name != "plt":
         raise TelemetryConfigurationError(
-            f"Unsupported IIRS_TELEMETRY_BACKEND={settings.telemetry_backend!r}. Use 'mock' or 'plt'."
+            f"Unsupported IIRS_TELEMETRY_BACKEND={settings.telemetry_backend!r}. Use 'plt'."
         )
 
     missing = [
@@ -1050,10 +968,10 @@ def build_telemetry_backend(settings: "Settings", *, client: httpx.Client | None
         if not value
     ]
     if missing:
-        if settings.allow_backend_fallback:
-            return MockTelemetryBackend()
         raise TelemetryConfigurationError(
-            "PLT backend selected but missing required environment variables: " + ", ".join(missing)
+            "PLT backend selected but missing required environment variables: "
+            + ", ".join(missing)
+            + "."
         )
 
     return PLTHttpTelemetryBackend(

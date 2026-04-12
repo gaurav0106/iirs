@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from dataclasses import replace
 from typing import Callable
 
 from .backends import RunbookStore, TelemetryBackend
@@ -22,7 +21,6 @@ from .models import (
     ToolCallRecord,
     ToolResult,
 )
-from .scenarios import ScenarioDefinition
 from .utils import utc_now
 
 
@@ -30,23 +28,7 @@ from .utils import utc_now
 class AgentContext:
     telemetry: TelemetryBackend
     runbooks: RunbookStore
-    scenarios: dict[str, ScenarioDefinition]
     llm: ReasoningClient | None = None
-
-
-def infer_scenario(alert: AlertPayload, scenarios: dict[str, ScenarioDefinition]) -> str:
-    if alert.scenario and alert.scenario in scenarios:
-        return alert.scenario
-    summary = alert.summary.lower()
-    service = alert.service.lower()
-    for name, scenario in scenarios.items():
-        if scenario.service.lower() == service:
-            return name
-        if "postgres" in summary and "postgres" in name:
-            return name
-        if "redis" in summary and "redis" in name:
-            return name
-    raise KeyError(f"Could not infer scenario for alert service={alert.service!r}")
 
 
 def _append_trace(state: IIRSState, run: AgentRun) -> list[AgentRun]:
@@ -118,6 +100,10 @@ def _normalize_root_cause_title(title: str) -> str:
     lowered = title.lower()
     if any(term in lowered for term in ("degraded", "timeout", "latency", "path")):
         return title.strip() or "Unknown root cause"
+    unavailable_terms = ("missing", "process missing", "unavailable", "down", "exited", "not running")
+    for service in ("catalogservice", "basketservice", "frontend"):
+        if service in lowered and any(term in lowered for term in unavailable_terms):
+            return f"{_service_label(service)} unavailable"
     postgres_terms = ("postgres", "postgresql")
     redis_terms = ("redis",)
     outage_terms = ("outage", "down", "unavailable", "dependency", "connection refused")
@@ -193,6 +179,22 @@ _DEPENDENCY_SIGNAL_PATTERNS: dict[str, tuple[str, ...]] = {
         "cache timeout",
     ),
 }
+_DEPENDENCY_OUTAGE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "postgres": (
+        "connection refused",
+        "retrylimitexceededexception",
+        "database unavailable",
+        "db.connect",
+        "postgres down",
+    ),
+    "redis": (
+        "redisconnectionexception",
+        "redistimeoutexception",
+        "connection refused",
+        "cache timeout",
+        "redis down",
+    ),
+}
 
 
 def _dependency_label(family: str | None) -> str:
@@ -259,42 +261,12 @@ def _runtime_state_for_item(item: EvidenceItem) -> str:
     return "unknown"
 
 
-def _best_effort_scenario_for_service(
-    service: str,
-    scenarios: dict[str, ScenarioDefinition],
-) -> ScenarioDefinition:
-    for scenario in scenarios.values():
-        if scenario.service == service:
-            return scenario
-    return ScenarioDefinition(
-        name=f"live_{service}",
-        service=service,
-        topic=f"{service} troubleshooting",
-        summary=f"{service} appears unhealthy in the live Aspire Shop environment.",
-        expected_root_cause=f"{_service_label(service)} unavailable",
-        secondary_hypothesis=f"Upstream dependency or configuration issue affecting {_service_label(service)}",
-        follow_up_checks=_generic_follow_up_checks(service),
-        safe_actions=_generic_safe_actions(service),
-        approval_actions=_generic_approval_actions(service),
-        logs=[],
-        metrics=[],
-        traces=[],
-        changes=[],
-    )
-
-
 def _candidate_services_for_alert(
     alert: AlertPayload,
-    scenarios: dict[str, ScenarioDefinition],
 ) -> list[str]:
     if alert.service and alert.service not in {"aspire-shop", "shop", "unknown"}:
         return [alert.service]
-
-    services = ["frontend"]
-    for scenario in scenarios.values():
-        if scenario.service not in services:
-            services.append(scenario.service)
-    return services
+    return ["frontend", "catalogservice", "basketservice"]
 
 
 def _matches_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -320,6 +292,17 @@ def _format_name_list(values: list[str]) -> str:
     if len(labels) == 2:
         return f"{labels[0]} and {labels[1]}"
     return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
+def _format_plain_list(values: list[str]) -> str:
+    items = [value for value in _unique_preserve(values) if value]
+    if not items:
+        return "the available evidence"
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
 def _runtime_failure_items(bundle: EvidenceBundle, *, include_support: bool = False) -> list[EvidenceItem]:
@@ -358,6 +341,20 @@ def _root_runtime_failures(bundle: EvidenceBundle) -> list[EvidenceItem]:
         if role == "service" and state in {"dead", "restarting", "missing", "exited", "created", "unknown"}:
             root_failures.append(item)
     return root_failures
+
+
+def _scoped_alert(alert: AlertPayload, service: str) -> AlertPayload:
+    return AlertPayload(
+        incident_id=alert.incident_id,
+        summary=alert.summary,
+        severity=alert.severity,
+        service=service,
+        environment=alert.environment,
+        started_at=alert.started_at,
+        window_minutes=alert.window_minutes,
+        scenario=alert.scenario,
+        labels=dict(alert.labels),
+    )
 
 
 def _runtime_items_for_family(bundle: EvidenceBundle, family: str) -> list[EvidenceItem]:
@@ -445,6 +442,52 @@ def _runtime_state_lines(bundle: EvidenceBundle, *, limit: int = 6) -> list[str]
         resource = str(item.metadata.get("resource") or item.service)
         lines.append(f"- {resource}: {item.value}")
     return lines
+
+
+def _evidence_channel_labels(bundle: EvidenceBundle) -> list[str]:
+    labels: list[str] = []
+    if bundle.runtime_states:
+        labels.append("runtime state")
+    if bundle.logs:
+        labels.append("logs")
+    if bundle.metrics:
+        labels.append("metrics")
+    if bundle.traces:
+        labels.append("traces")
+    if bundle.runbook_hits:
+        labels.append("runbook guidance")
+    if bundle.change_signals:
+        labels.append("change signals")
+    return labels
+
+
+def _non_live_summary(bundle: EvidenceBundle, top_title: str, service: str | None) -> str:
+    evidence_channels = _evidence_channel_labels(bundle)
+    if evidence_channels:
+        return (
+            f"Most likely root cause: {top_title}. Evidence spans "
+            f"{_format_plain_list(evidence_channels)} for {_service_label(service)}."
+        )
+    return (
+        f"Most likely root cause: {top_title}. Evidence is thin, so confirm the first failing log, "
+        "metric, or trace before taking state-changing actions."
+    )
+
+
+def _dependency_outage_supported(
+    alert: AlertPayload,
+    bundle: EvidenceBundle,
+    family: str | None,
+    items: list[EvidenceItem],
+) -> bool:
+    if family is None or not items:
+        return False
+    if _runtime_items_for_family(bundle, family):
+        return True
+    evidence_text = f" {alert.summary.lower()} " + " ".join(_evidence_text(item) for item in items)
+    score = len(items)
+    score += sum(1 for pattern in _DEPENDENCY_OUTAGE_PATTERNS.get(family, ()) if pattern in evidence_text)
+    return score >= 4
 
 
 def _live_summary(bundle: EvidenceBundle, top_title: str, dominant_service: str | None) -> str:
@@ -602,6 +645,38 @@ def _live_approval_actions(bundle: EvidenceBundle, top_title: str, dominant_serv
     return _generic_approval_actions(dominant_service)
 
 
+def _non_live_safe_actions(top_title: str, dominant_service: str | None) -> list[str]:
+    family = _dependency_family_from_title(top_title)
+    if family == "postgres":
+        return [
+            "Inspect PostgreSQL health, logs, and recent failed connections without changing state.",
+            "Correlate catalogservice failures with the first PostgreSQL timeout or connection-refused evidence.",
+            "Validate recovery by checking fresh catalog request latency and error-rate after PostgreSQL is healthy again.",
+        ]
+    if family == "redis":
+        return [
+            "Inspect Redis health, logs, and recent cache failures without changing state.",
+            "Correlate basketservice failures with the first Redis timeout or connection-refused evidence.",
+            "Validate recovery by checking fresh basket and checkout request latency after Redis is healthy again.",
+        ]
+    return _generic_safe_actions(dominant_service)
+
+
+def _non_live_approval_actions(top_title: str, dominant_service: str | None) -> list[str]:
+    family = _dependency_family_from_title(top_title)
+    if family == "postgres":
+        return [
+            "Restart or fail over PostgreSQL only if read-only checks confirm the database is still unavailable.",
+            "Roll back the most likely database connectivity or secret change if PostgreSQL is reachable but requests still fail.",
+        ]
+    if family == "redis":
+        return [
+            "Restart or fail over Redis only if read-only checks confirm the cache is still unavailable.",
+            "Roll back the most likely cache connectivity or secret change if Redis is reachable but requests still fail.",
+        ]
+    return _generic_approval_actions(dominant_service)
+
+
 def _evidence_items_for_ids(bundle: EvidenceBundle, evidence_ids: list[str]) -> list[EvidenceItem]:
     evidence_lookup = bundle.by_id()
     items: list[EvidenceItem] = []
@@ -626,12 +701,11 @@ def _format_evidence_lines(items: list[EvidenceItem], *, limit: int = 3, include
 def _retrieve_for_alert(
     context: AgentContext,
     alert: AlertPayload,
-    scenario: ScenarioDefinition,
 ) -> tuple[list[ToolCallRecord], EvidenceBundle]:
     tool_calls: list[ToolCallRecord] = []
 
     started_at = utc_now()
-    error_logs = context.telemetry.get_error_logs(alert, scenario)
+    error_logs = context.telemetry.get_error_logs(alert)
     tool_calls.append(
         _record_tool_call(
             "get_error_logs",
@@ -642,7 +716,7 @@ def _retrieve_for_alert(
     )
 
     started_at = utc_now()
-    latency = context.telemetry.get_latency_metrics(alert, scenario)
+    latency = context.telemetry.get_latency_metrics(alert)
     tool_calls.append(
         _record_tool_call(
             "get_latency_metrics",
@@ -653,7 +727,7 @@ def _retrieve_for_alert(
     )
 
     started_at = utc_now()
-    error_rate = context.telemetry.get_error_rate_metrics(alert, scenario)
+    error_rate = context.telemetry.get_error_rate_metrics(alert)
     tool_calls.append(
         _record_tool_call(
             "get_error_rate_metrics",
@@ -664,7 +738,7 @@ def _retrieve_for_alert(
     )
 
     started_at = utc_now()
-    failed_traces = context.telemetry.get_failed_traces(alert, scenario)
+    failed_traces = context.telemetry.get_failed_traces(alert)
     tool_calls.append(
         _record_tool_call(
             "get_failed_traces",
@@ -675,7 +749,7 @@ def _retrieve_for_alert(
     )
 
     started_at = utc_now()
-    slow_traces = context.telemetry.get_slow_traces(alert, scenario)
+    slow_traces = context.telemetry.get_slow_traces(alert)
     tool_calls.append(
         _record_tool_call(
             "get_slow_traces",
@@ -686,18 +760,18 @@ def _retrieve_for_alert(
     )
 
     started_at = utc_now()
-    runbooks = context.runbooks.get_runbook(alert, scenario)
+    runbooks = context.runbooks.get_runbook(alert)
     tool_calls.append(
         _record_tool_call(
             "get_runbook",
-            {"topic": scenario.topic, "service": alert.service},
+            {"service": alert.service, "summary": alert.summary},
             started_at,
             runbooks,
         )
     )
 
     started_at = utc_now()
-    changes = context.telemetry.get_recent_changes(alert, scenario)
+    changes = context.telemetry.get_recent_changes(alert)
     tool_calls.append(
         _record_tool_call(
             "get_recent_changes",
@@ -776,10 +850,7 @@ def _deterministic_live_hypotheses(state: IIRSState) -> list[Hypothesis]:
         top_title = "No clear live fault detected"
         confidence = 0.82 if len(healthy_runtime_ids) >= 3 else (0.7 if healthy_runtime_ids else 0.42)
         support_ids = healthy_runtime_ids or support_ids
-        if top_dependency_family is not None and top_dependency_items:
-            secondary_title = _dependency_path_title(dominant_service, top_dependency_family)
-            secondary_support_ids = dependency_signal_ids[:2] or [item.id for item in all_items[:2]]
-        elif all_items:
+        if all_items:
             secondary_title = "Transient issue or stale telemetry from earlier faults"
             secondary_support_ids = [item.id for item in all_items[:2]]
         else:
@@ -896,40 +967,76 @@ def _deterministic_live_hypotheses(state: IIRSState) -> list[Hypothesis]:
     ]
 
 
-def _deterministic_hypotheses(state: IIRSState, scenario: ScenarioDefinition) -> list[Hypothesis]:
+def _deterministic_hypotheses(state: IIRSState) -> list[Hypothesis]:
+    if _is_live_alert(state["alert"]):
+        return _deterministic_live_hypotheses(state)
+
+    alert = state["alert"]
     bundle = state["evidence_bundle"]
     all_items = bundle.all_items()
-    evidence_ids = [item.id for item in all_items]
-    primary_support = evidence_ids[: min(5, len(evidence_ids))]
+    dominant_service = _dominant_service(bundle) or alert.service
     change_ids = [item.id for item in bundle.change_signals]
-    trace_ids = [item.id for item in bundle.traces]
+    default_support = [item.id for item in all_items[:4]]
+    next_checks = _generic_follow_up_checks(dominant_service)
+    top_dependency_family, top_dependency_items = _top_dependency_signal_for_service(bundle, dominant_service)
+    dependency_support = [item.id for item in top_dependency_items[:4]]
+
+    if _dependency_outage_supported(alert, bundle, top_dependency_family, top_dependency_items):
+        top_title = f"{_dependency_label(top_dependency_family)} dependency outage"
+        confidence = 0.9 if len(top_dependency_items) >= 3 else 0.82
+        top_support = dependency_support or default_support
+        secondary_title = _dependency_path_title(dominant_service, top_dependency_family)
+        secondary_support = dependency_support[:2] or default_support[:2]
+    elif top_dependency_family is not None and top_dependency_items:
+        top_title = _dependency_path_title(dominant_service, top_dependency_family)
+        confidence = 0.78 if len(top_dependency_items) >= 3 else 0.68
+        top_support = dependency_support or default_support
+        secondary_title = (
+            f"{_service_label(dominant_service)} unavailable"
+            if dominant_service
+            else f"{_dependency_label(top_dependency_family)} dependency issue"
+        )
+        secondary_support = default_support[:2] or dependency_support[:2]
+    elif default_support:
+        top_title = f"{_service_label(dominant_service)} unavailable" if dominant_service else "Service unavailable"
+        confidence = 0.64 if len(default_support) >= 3 else 0.52
+        top_support = default_support
+        secondary_title = (
+            f"Upstream dependency issue affecting {_service_label(dominant_service)}"
+            if dominant_service
+            else "Upstream dependency issue"
+        )
+        secondary_support = default_support[:2]
+    else:
+        top_title = "No clear fault detected in retrieved evidence"
+        confidence = 0.24
+        top_support = []
+        secondary_title = "Insufficient evidence to rank a concrete alternate hypothesis"
+        secondary_support = []
 
     return [
         Hypothesis(
             rank=1,
-            title=scenario.expected_root_cause,
-            confidence=0.93 if len(primary_support) >= 5 else 0.84,
-            supporting_evidence_ids=primary_support,
+            title=top_title,
+            confidence=confidence,
+            supporting_evidence_ids=top_support,
             contradicting_evidence_ids=change_ids[:1],
-            next_checks=scenario.follow_up_checks,
+            next_checks=next_checks,
         ),
         Hypothesis(
             rank=2,
-            title=scenario.secondary_hypothesis,
-            confidence=0.46,
-            supporting_evidence_ids=trace_ids[:2] or primary_support[:2],
+            title=secondary_title,
+            confidence=max(0.1, confidence - 0.28),
+            supporting_evidence_ids=secondary_support,
             contradicting_evidence_ids=change_ids[:1],
-            next_checks=[
-                "Confirm whether request workers recover immediately once the dependency is restored.",
-                "Inspect connection-pool saturation and retry pressure.",
-            ],
+            next_checks=next_checks,
         ),
         Hypothesis(
             rank=3,
             title="Recent deploy or configuration regression",
             confidence=0.18 if change_ids else 0.08,
             supporting_evidence_ids=change_ids[:1],
-            contradicting_evidence_ids=primary_support[:3],
+            contradicting_evidence_ids=top_support[:3],
             next_checks=[
                 "Review deployment metadata and config drift only if dependency health is normal.",
             ],
@@ -940,22 +1047,17 @@ def _deterministic_hypotheses(state: IIRSState, scenario: ScenarioDefinition) ->
 def _llm_hypotheses(
     context: AgentContext,
     state: IIRSState,
-    scenario: ScenarioDefinition | None,
 ) -> list[Hypothesis]:
-    if scenario is None and _is_live_health_check_alert(state["alert"]):
+    if _is_live_health_check_alert(state["alert"]):
         return _deterministic_live_hypotheses(state)
     if context.llm is None:
-        return _deterministic_hypotheses(state, scenario) if scenario is not None else _deterministic_live_hypotheses(state)
+        return _deterministic_hypotheses(state)
 
     response = context.llm.analyze_incident(state)
     all_items = state["evidence_bundle"].all_items()
     valid_ids = {item.id for item in all_items}
     default_support = [item.id for item in all_items[:3]]
-    default_next_checks = (
-        scenario.follow_up_checks
-        if scenario is not None
-        else _generic_follow_up_checks(_dominant_service(state["evidence_bundle"]))
-    )
+    default_next_checks = _generic_follow_up_checks(_dominant_service(state["evidence_bundle"]))
     hypotheses: list[Hypothesis] = []
     for index, raw in enumerate(response.get("hypotheses", [])[:3], start=1):
         supporting_ids = _filter_evidence_ids(raw.get("supporting_evidence_ids"), valid_ids) or default_support
@@ -974,6 +1076,19 @@ def _llm_hypotheses(
     if not hypotheses:
         raise OpenAIRequestError("OpenAI analyst response did not contain any hypotheses.")
     return hypotheses
+
+
+def _should_force_deterministic_live_analysis(state: IIRSState) -> bool:
+    if not _is_live_alert(state["alert"]):
+        return False
+    if _is_live_health_check_alert(state["alert"]):
+        return True
+    deterministic_top = _deterministic_live_hypotheses(state)[0].title
+    return deterministic_top in {
+        "PostgreSQL dependency outage",
+        "Redis dependency outage",
+        "Multiple service outages in Aspire Shop",
+    } or deterministic_top.endswith(" unavailable")
 
 
 def _deterministic_critique(state: IIRSState) -> Critique:
@@ -1067,8 +1182,8 @@ def _llm_critique(context: AgentContext, state: IIRSState) -> Critique:
 
 def _deterministic_plan(
     state: IIRSState,
-    scenario: ScenarioDefinition | None,
 ) -> tuple[list[PlanStep], IncidentBrief]:
+    alert = state["alert"]
     hypotheses = state["hypotheses"]
     critique = state["critique"]
     bundle = state["evidence_bundle"]
@@ -1076,34 +1191,33 @@ def _deterministic_plan(
     dominant_service = _dominant_service(bundle)
 
     steps: list[PlanStep] = []
-    safe_actions = (
-        scenario.safe_actions
-        if scenario is not None
-        else _live_safe_actions(bundle, hypotheses[0].title, dominant_service)
-    )
-    approval_actions = (
-        scenario.approval_actions
-        if scenario is not None
-        else _live_approval_actions(bundle, hypotheses[0].title, dominant_service)
-    )
+    if _is_live_alert(alert):
+        safe_actions = _live_safe_actions(bundle, hypotheses[0].title, dominant_service)
+        approval_actions = _live_approval_actions(bundle, hypotheses[0].title, dominant_service)
+    else:
+        safe_actions = _non_live_safe_actions(hypotheses[0].title, dominant_service)
+        approval_actions = _non_live_approval_actions(hypotheses[0].title, dominant_service)
     brief_title = (
-        f"Incident Brief: {scenario.name}"
-        if scenario is not None
+        f"Incident Brief: {alert.scenario}"
+        if alert.scenario
         else (
             f"Incident Brief: live health check for {_service_label(dominant_service) if dominant_service else 'Aspire Shop'}"
-            if _is_live_health_check_alert(state["alert"])
+            if _is_live_health_check_alert(alert)
             else (
                 "Incident Brief: live diagnosis for Aspire Shop"
-                if hypotheses[0].title == "Multiple service outages in Aspire Shop"
-                else f"Incident Brief: live diagnosis for {_service_label(dominant_service) if dominant_service else 'Aspire Shop'}"
+                if _is_live_alert(alert) and hypotheses[0].title == "Multiple service outages in Aspire Shop"
+                else (
+                    f"Incident Brief: live diagnosis for {_service_label(dominant_service) if dominant_service else 'Aspire Shop'}"
+                    if _is_live_alert(alert)
+                    else f"Incident Brief: investigation for {_service_label(dominant_service) if dominant_service else _service_label(alert.service)}"
+                )
             )
         )
     )
     brief_summary = (
-        f"Most likely root cause: {hypotheses[0].title}. "
-        f"Evidence spans logs, metrics, traces, and runbook guidance for {scenario.service}."
-        if scenario is not None
-        else _live_summary(bundle, hypotheses[0].title, dominant_service)
+        _live_summary(bundle, hypotheses[0].title, dominant_service)
+        if _is_live_alert(alert)
+        else _non_live_summary(bundle, hypotheses[0].title, dominant_service or alert.service)
     )
 
     for index, description in enumerate(safe_actions, start=1):
@@ -1143,10 +1257,9 @@ def _deterministic_plan(
 def _llm_plan(
     context: AgentContext,
     state: IIRSState,
-    scenario: ScenarioDefinition | None,
 ) -> tuple[list[PlanStep], IncidentBrief]:
     if context.llm is None:
-        return _deterministic_plan(state, scenario)
+        return _deterministic_plan(state)
 
     response = context.llm.plan_incident(state)
     valid_ids = {item.id for item in state["evidence_bundle"].all_items()}
@@ -1182,9 +1295,13 @@ def _llm_plan(
             str(raw_title).strip()
             if (raw_title := response.get("brief_title"))
             else (
-                f"Incident Brief: {scenario.name}"
-                if scenario is not None
-                else f"Incident Brief: live diagnosis for {_service_label(_dominant_service(state['evidence_bundle']))}"
+                f"Incident Brief: {state['alert'].scenario}"
+                if state["alert"].scenario
+                else (
+                    f"Incident Brief: live diagnosis for {_service_label(_dominant_service(state['evidence_bundle']))}"
+                    if _is_live_alert(state["alert"])
+                    else f"Incident Brief: investigation for {_service_label(_dominant_service(state['evidence_bundle']) or state['alert'].service)}"
+                )
             )
         ),
         summary=str(raw_summary).strip() if (raw_summary := response.get("brief_summary")) else f"Most likely root cause: {state['hypotheses'][0].title}.",
@@ -1205,19 +1322,14 @@ def _llm_plan(
 def make_retriever_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def retriever(state: IIRSState) -> dict[str, object]:
         alert = state["alert"]
+        scenario_name = alert.scenario
+        candidate_services = _candidate_services_for_alert(alert) if _is_live_alert(alert) else [alert.service]
         if _is_live_alert(alert):
-            scenario_name = None
-            candidate_services = _candidate_services_for_alert(alert, context.scenarios)
             tool_calls: list[ToolCallRecord] = []
             bundle = EvidenceBundle()
             for service in candidate_services:
-                service_scenario = _best_effort_scenario_for_service(service, context.scenarios)
-                service_alert = replace(
-                    alert,
-                    service=service,
-                    scenario=service_scenario.name if service_scenario.name in context.scenarios else None,
-                )
-                service_tool_calls, service_bundle = _retrieve_for_alert(context, service_alert, service_scenario)
+                service_alert = _scoped_alert(alert, service)
+                service_tool_calls, service_bundle = _retrieve_for_alert(context, service_alert)
                 tool_calls.extend(service_tool_calls)
                 bundle.logs.extend(service_bundle.logs)
                 bundle.metrics.extend(service_bundle.metrics)
@@ -1225,13 +1337,7 @@ def make_retriever_node(context: AgentContext) -> Callable[[IIRSState], dict[str
                 bundle.runbook_hits.extend(service_bundle.runbook_hits)
                 bundle.change_signals.extend(service_bundle.change_signals)
         else:
-            try:
-                scenario_name = infer_scenario(alert, context.scenarios)
-                scenario = context.scenarios[scenario_name]
-            except KeyError:
-                scenario_name = None
-                scenario = _best_effort_scenario_for_service(alert.service, context.scenarios)
-            tool_calls, bundle = _retrieve_for_alert(context, alert, scenario)
+            tool_calls, bundle = _retrieve_for_alert(context, alert)
 
         started_at = utc_now()
         runtime_states = context.telemetry.get_runtime_states(
@@ -1321,13 +1427,12 @@ def make_retriever_node(context: AgentContext) -> Callable[[IIRSState], dict[str
 
 def make_analyst_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def analyst(state: IIRSState) -> dict[str, object]:
-        scenario = context.scenarios[state["scenario_name"]] if state.get("scenario_name") in context.scenarios else None
         all_items = state["evidence_bundle"].all_items()
-        if context.llm is None:
-            hypotheses = _deterministic_hypotheses(state, scenario) if scenario is not None else _deterministic_live_hypotheses(state)
+        if context.llm is None or _should_force_deterministic_live_analysis(state):
+            hypotheses = _deterministic_hypotheses(state)
             execution_mode = "deterministic"
         else:
-            hypotheses = _llm_hypotheses(context, state, scenario)
+            hypotheses = _llm_hypotheses(context, state)
             execution_mode = "model"
 
         agent_run = AgentRun(
@@ -1335,9 +1440,13 @@ def make_analyst_node(context: AgentContext) -> Callable[[IIRSState], dict[str, 
             started_at=utc_now(),
             finished_at=utc_now(),
             input_summary=(
-                f"Analyzed {len(all_items)} evidence items for scenario {scenario.name}."
-                if scenario is not None
-                else f"Analyzed {len(all_items)} evidence items for a live multi-service investigation."
+                f"Analyzed {len(all_items)} evidence items for {state['alert'].scenario}."
+                if state["alert"].scenario
+                else (
+                    f"Analyzed {len(all_items)} evidence items for a live multi-service investigation."
+                    if _is_live_alert(state["alert"])
+                    else f"Analyzed {len(all_items)} evidence items for {_service_label(state['alert'].service)}."
+                )
             ),
             output_summary=(
                 f"Ranked root causes with top hypothesis '{hypotheses[0].title}' "
@@ -1397,12 +1506,11 @@ def make_critic_node(context: AgentContext) -> Callable[[IIRSState], dict[str, o
 
 def make_planner_node(context: AgentContext) -> Callable[[IIRSState], dict[str, object]]:
     def planner(state: IIRSState) -> dict[str, object]:
-        scenario = context.scenarios[state["scenario_name"]] if state.get("scenario_name") in context.scenarios else None
         if context.llm is None:
-            steps, brief = _deterministic_plan(state, scenario)
+            steps, brief = _deterministic_plan(state)
             execution_mode = "deterministic"
         else:
-            steps, brief = _llm_plan(context, state, scenario)
+            steps, brief = _llm_plan(context, state)
             execution_mode = "model"
 
         agent_run = AgentRun(

@@ -83,17 +83,17 @@ These commands produce simple artifacts that are useful to include in the zip.
 
 ```bash
 ./.venv/bin/python -m unittest discover -s tests | tee submission_artifacts/unittest.txt
-./.venv/bin/iirs eval --runs 2 | tee submission_artifacts/eval.txt
-./.venv/bin/iirs run --scenario postgres_down --show-trace | tee submission_artifacts/mock_postgres.txt
-./.venv/bin/iirs run --scenario redis_down --show-trace | tee submission_artifacts/mock_redis.txt
+./.venv/bin/iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace | tee submission_artifacts/postgres_fixture.txt
+./.venv/bin/iirs run --alert-file fixtures/alerts/redis_down.json --show-trace | tee submission_artifacts/redis_fixture.txt
+./.venv/bin/iirs verify-live --profile postgres_down | tee submission_artifacts/verify_live_postgres_profile.txt
 ```
 
-The evaluation output now includes both quantitative accuracy and a qualitative review score for evidence grounding, critic caution, and action-plan traceability.
+These artifacts show the deterministic alert-fixture flow plus the live-signature validator.
 
 If the live rehearsal reproduces the fault but one telemetry check stays flaky, the best fallback is to show the saved live rehearsal output and then switch immediately to:
 
 ```bash
-IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --scenario postgres_down --show-trace
+IIRS_USE_OPENAI_AGENTS=false ./.venv/bin/iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace
 ```
 
 That preserves the multi-agent demo even when the live environment is being annoying.
@@ -168,7 +168,7 @@ done | tee submission_artifacts/postgres_fault_traffic.txt
 ### 4. Verify Live Signals
 
 ```bash
-./.venv/bin/iirs verify-live --scenario postgres_down --started-at "$started_at_pg" --window-minutes 10 \
+./.venv/bin/iirs verify-live --profile postgres_down --started-at "$started_at_pg" --window-minutes 10 \
   | tee submission_artifacts/verify_live_postgres.txt
 ```
 
@@ -258,7 +258,7 @@ done | tee submission_artifacts/redis_fault_traffic.txt
 ### 5. Verify Live Signals
 
 ```bash
-./.venv/bin/iirs verify-live --scenario redis_down --started-at "$started_at_redis" --window-minutes 10 \
+./.venv/bin/iirs verify-live --profile redis_down --started-at "$started_at_redis" --window-minutes 10 \
   | tee submission_artifacts/verify_live_redis.txt
 ```
 

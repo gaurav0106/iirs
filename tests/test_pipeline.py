@@ -8,10 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from iirs.config import Settings
 from iirs.models import Citation, EvidenceItem, ToolResult
 from iirs.pipeline import IIRSPipeline
+from tests.helpers import StaticScenarioTelemetryBackend, load_alert_fixture
 
 
 class FakeLiveTelemetryBackend:
@@ -34,7 +37,7 @@ class FakeLiveTelemetryBackend:
             ],
         )
 
-    def get_error_logs(self, alert, scenario):
+    def get_error_logs(self, alert):
         if alert.service == "catalogservice":
             items = [
                 self._item(
@@ -67,7 +70,7 @@ class FakeLiveTelemetryBackend:
     def get_runtime_log_tails(self, alert, runtime_items):
         return ToolResult(query="runtime-log-tails:none", items=[])
 
-    def get_latency_metrics(self, alert, scenario):
+    def get_latency_metrics(self, alert):
         if alert.service == "catalogservice":
             items = [
                 self._item(
@@ -83,7 +86,7 @@ class FakeLiveTelemetryBackend:
             items = []
         return ToolResult(query=f"latency:{alert.service}", items=items)
 
-    def get_error_rate_metrics(self, alert, scenario):
+    def get_error_rate_metrics(self, alert):
         if alert.service == "catalogservice":
             items = [
                 self._item(
@@ -99,7 +102,7 @@ class FakeLiveTelemetryBackend:
             items = []
         return ToolResult(query=f"errors:{alert.service}", items=items)
 
-    def get_failed_traces(self, alert, scenario):
+    def get_failed_traces(self, alert):
         if alert.service == "catalogservice":
             items = [
                 self._item(
@@ -115,10 +118,10 @@ class FakeLiveTelemetryBackend:
             items = []
         return ToolResult(query=f"failed-traces:{alert.service}", items=items)
 
-    def get_slow_traces(self, alert, scenario):
+    def get_slow_traces(self, alert):
         return ToolResult(query=f"slow-traces:{alert.service}", items=[])
 
-    def get_recent_changes(self, alert, scenario):
+    def get_recent_changes(self, alert):
         return ToolResult(query=f"changes:{alert.service}", items=[])
 
 
@@ -132,10 +135,16 @@ class PipelineTests(unittest.TestCase):
             fixtures_dir=ROOT / "fixtures" / "alerts",
             prefer_langgraph=False,
         )
-        self.pipeline = IIRSPipeline(settings=self.settings)
+        self.pipeline = IIRSPipeline(
+            settings=self.settings,
+            telemetry_backend=StaticScenarioTelemetryBackend(),
+        )
+
+    def _load_alert(self, name: str):
+        return load_alert_fixture(name)
 
     def test_postgres_scenario_produces_expected_root_cause(self) -> None:
-        state = self.pipeline.run_scenario("postgres_down")
+        state = self.pipeline.run(self._load_alert("postgres_down"))
 
         brief = state["incident_brief"]
         self.assertEqual(brief.probable_root_causes[0].title, "PostgreSQL dependency outage")
@@ -145,14 +154,14 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(Path(state["trace_path"]).exists())
 
     def test_redis_scenario_produces_expected_root_cause(self) -> None:
-        state = self.pipeline.run_scenario("redis_down")
+        state = self.pipeline.run(self._load_alert("redis_down"))
 
         brief = state["incident_brief"]
         self.assertEqual(brief.probable_root_causes[0].title, "Redis dependency outage")
         self.assertGreaterEqual(len(state["evidence_bundle"].all_items()), 7)
 
     def test_follow_up_uses_last_incident_state(self) -> None:
-        state = self.pipeline.run_scenario("postgres_down")
+        state = self.pipeline.run(self._load_alert("postgres_down"))
 
         answer = self.pipeline.follow_up("What is the root cause and what evidence supports it?", state)
 
@@ -160,7 +169,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("Supporting evidence", answer)
 
     def test_build_initial_state_and_finalize_state_support_stepwise_runs(self) -> None:
-        alert = self.pipeline.build_alert_for_scenario("postgres_down")
+        alert = self._load_alert("postgres_down")
         state = self.pipeline.build_initial_state(alert)
 
         self.assertEqual(state["alert"].incident_id, alert.incident_id)
@@ -291,7 +300,7 @@ class PipelineTests(unittest.TestCase):
                         filtered.append(item)
                 return ToolResult(query=f"runtime:{','.join(requested)}", items=filtered)
 
-            def get_error_rate_metrics(self, alert, scenario):
+            def get_error_rate_metrics(self, alert):
                 if alert.service == "catalogservice":
                     items = [
                         self._item(
@@ -379,7 +388,7 @@ class PipelineTests(unittest.TestCase):
                         filtered.append(item)
                 return ToolResult(query=f"runtime:{','.join(requested)}", items=filtered)
 
-            def get_error_logs(self, alert, scenario):
+            def get_error_logs(self, alert):
                 if alert.service == "basketservice":
                     items = [
                         self._item(
@@ -395,7 +404,7 @@ class PipelineTests(unittest.TestCase):
                     items = []
                 return ToolResult(query=f"logs:{alert.service}", items=items)
 
-            def get_error_rate_metrics(self, alert, scenario):
+            def get_error_rate_metrics(self, alert):
                 if alert.service == "frontend":
                     items = [
                         self._item(
@@ -419,6 +428,130 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(brief.probable_root_causes[0].title, "catalogservice unavailable")
         self.assertNotEqual(brief.probable_root_causes[0].title, "basketservice to Redis dependency path degraded")
         self.assertIn("catalogservice is missing or not healthy", brief.summary)
+
+    def test_live_diagnosis_forces_deterministic_analyst_when_runtime_proves_service_missing(self) -> None:
+        class FakeMissingCatalogTelemetryBackend(FakeLiveTelemetryBackend):
+            def get_runtime_states(self, alert, services=None):
+                requested = services or [alert.service]
+                items = [
+                    self._item(
+                        item_id="runtime.catalogservice",
+                        category="runtime_states",
+                        service="catalogservice",
+                        summary="Runtime state for catalogservice: missing",
+                        value="Process not observed in docker or local process list",
+                        excerpt="resource not observed in local process or container listings",
+                    ),
+                    self._item(
+                        item_id="runtime.frontend",
+                        category="runtime_states",
+                        service="frontend",
+                        summary="Runtime state for frontend: running",
+                        value="Up 8 minutes",
+                        excerpt="container=aspire-frontend-1; status=Up 8 minutes",
+                    ),
+                ]
+                metadata = {
+                    "runtime.catalogservice": {
+                        "resource": "catalogservice",
+                        "family": "catalogservice",
+                        "role": "service",
+                        "state": "missing",
+                    },
+                    "runtime.frontend": {
+                        "resource": "frontend",
+                        "family": "frontend",
+                        "role": "service",
+                        "state": "running",
+                    },
+                }
+                filtered = []
+                for item in items:
+                    if item.service in requested:
+                        item.metadata.update(metadata[item.id])
+                        filtered.append(item)
+                return ToolResult(query=f"runtime:{','.join(requested)}", items=filtered)
+
+            def get_error_rate_metrics(self, alert):
+                if alert.service == "frontend":
+                    items = [
+                        self._item(
+                            item_id="metric.live.frontend.503",
+                            category="metrics",
+                            service="frontend",
+                            summary="frontend returned 503s while catalogservice was missing",
+                            value="status=503",
+                            excerpt="frontend showed upstream 503s",
+                        )
+                    ]
+                else:
+                    items = []
+                return ToolResult(query=f"errors:{alert.service}", items=items)
+
+        class FakeMisleadingReasoningClient:
+            def analyze_incident(self, state):
+                return {
+                    "summary": "Model overfit the frontend symptoms.",
+                    "hypotheses": [
+                        {
+                            "title": "Catalogservice process missing",
+                            "confidence": 0.70,
+                            "supporting_evidence_ids": ["metric.live.frontend.503"],
+                            "contradicting_evidence_ids": [],
+                            "next_checks": ["Inspect frontend handlers."],
+                        },
+                        {
+                            "title": "Frontend application errors / request handling bug",
+                            "confidence": 0.50,
+                            "supporting_evidence_ids": ["metric.live.frontend.503"],
+                            "contradicting_evidence_ids": [],
+                            "next_checks": ["Inspect frontend handlers."],
+                        },
+                    ],
+                }
+
+            def critique_incident(self, state):
+                return {
+                    "relevant_evidence_ids": state["hypotheses"][0].supporting_evidence_ids,
+                    "hallucination_risks": [],
+                    "missing_data": [],
+                    "safety_notes": [],
+                    "findings": [],
+                }
+
+            def plan_incident(self, state):
+                return {
+                    "brief_title": "Incident Brief: live diagnosis for Aspire Shop",
+                    "brief_summary": "catalogservice is the missing resource.",
+                    "open_questions": [],
+                    "evidence_snapshot": [],
+                    "steps": [
+                        {
+                            "description": "Inspect runtime state.",
+                            "action_type": "auto-safe",
+                            "rationale": "safe",
+                            "evidence_ids": state["hypotheses"][0].supporting_evidence_ids,
+                        }
+                    ],
+                }
+
+            def answer_follow_up(self, question, state):
+                return "ok"
+
+        pipeline = IIRSPipeline(
+            settings=self.settings,
+            reasoning_client=FakeMisleadingReasoningClient(),
+            telemetry_backend=FakeMissingCatalogTelemetryBackend(),
+        )
+
+        state = pipeline.run(pipeline.build_live_alert("what broke in aspire shop right now?"))
+
+        self.assertEqual(state["trace_runs"][1].execution_mode, "deterministic")
+        self.assertEqual(state["incident_brief"].probable_root_causes[0].title, "catalogservice unavailable")
+        self.assertNotEqual(
+            state["incident_brief"].probable_root_causes[1].title,
+            "Frontend application errors / request handling bug",
+        )
 
     def test_live_diagnosis_collects_targeted_runtime_log_tails_for_unhealthy_resources(self) -> None:
         class FakeTailingTelemetryBackend(FakeLiveTelemetryBackend):
@@ -533,21 +666,22 @@ class PipelineTests(unittest.TestCase):
 
         brief = state["incident_brief"]
         self.assertEqual(brief.probable_root_causes[0].title, "No clear live fault detected")
-        self.assertEqual(brief.probable_root_causes[1].title, "catalogservice to PostgreSQL dependency path degraded")
+        self.assertEqual(brief.probable_root_causes[1].title, "Transient issue or stale telemetry from earlier faults")
+        self.assertNotIn("dependency path degraded", brief.probable_root_causes[1].title.lower())
         self.assertIn("does not show a clear active fault", brief.summary)
 
     def test_live_diagnosis_prefers_no_clear_fault_when_runtime_is_green_and_no_direct_signal(self) -> None:
         class FakeGreenRuntimeOnlyTelemetryBackend(FakeLiveTelemetryBackend):
-            def get_error_logs(self, alert, scenario):
+            def get_error_logs(self, alert):
                 return ToolResult(query=f"logs:{alert.service}", items=[])
 
-            def get_latency_metrics(self, alert, scenario):
+            def get_latency_metrics(self, alert):
                 return ToolResult(query=f"latency:{alert.service}", items=[])
 
-            def get_error_rate_metrics(self, alert, scenario):
+            def get_error_rate_metrics(self, alert):
                 return ToolResult(query=f"errors:{alert.service}", items=[])
 
-            def get_failed_traces(self, alert, scenario):
+            def get_failed_traces(self, alert):
                 return ToolResult(query=f"failed-traces:{alert.service}", items=[])
 
             def get_runtime_states(self, alert, services=None):
@@ -618,16 +752,16 @@ class PipelineTests(unittest.TestCase):
 
     def test_live_health_check_detects_redis_outage_when_basketcache_is_down(self) -> None:
         class FakeBasketcacheDownTelemetryBackend(FakeLiveTelemetryBackend):
-            def get_error_logs(self, alert, scenario):
+            def get_error_logs(self, alert):
                 return ToolResult(query=f"logs:{alert.service}", items=[])
 
-            def get_latency_metrics(self, alert, scenario):
+            def get_latency_metrics(self, alert):
                 return ToolResult(query=f"latency:{alert.service}", items=[])
 
-            def get_error_rate_metrics(self, alert, scenario):
+            def get_error_rate_metrics(self, alert):
                 return ToolResult(query=f"errors:{alert.service}", items=[])
 
-            def get_failed_traces(self, alert, scenario):
+            def get_failed_traces(self, alert):
                 return ToolResult(query=f"failed-traces:{alert.service}", items=[])
 
             def get_runtime_states(self, alert, services=None):
@@ -711,7 +845,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(state["incident_brief"].probable_root_causes[0].title, "frontend unavailable")
 
     def test_deterministic_follow_up_expands_short_why_question(self) -> None:
-        state = self.pipeline.run_scenario("postgres_down")
+        state = self.pipeline.run(self._load_alert("postgres_down"))
 
         follow_up = self.pipeline.follow_up("why?", state)
 
@@ -719,7 +853,7 @@ class PipelineTests(unittest.TestCase):
         self.assertIn("Supporting evidence", follow_up)
 
     def test_deterministic_follow_up_expands_short_next_question(self) -> None:
-        state = self.pipeline.run_scenario("redis_down")
+        state = self.pipeline.run(self._load_alert("redis_down"))
 
         follow_up = self.pipeline.follow_up("then what?", state)
 

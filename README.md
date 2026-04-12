@@ -1,6 +1,6 @@
 # IIRS
 
-IIRS is a local incident-response assistant prototype for issue [#1](https://github.com/gaurav0106/iirs/issues/1). It runs a `Retriever -> Analyst -> Critic -> Planner` pipeline over mock or live telemetry and produces an Incident Brief with ranked root causes, evidence citations, and recommended actions.
+IIRS is a local incident-response assistant prototype for issue [#1](https://github.com/gaurav0106/iirs/issues/1). It runs a `Retriever -> Analyst -> Critic -> Planner` pipeline over sample alert fixtures or live telemetry and produces an Incident Brief with ranked root causes, evidence citations, and recommended actions.
 
 ## Current scope
 
@@ -9,13 +9,11 @@ Implemented:
 - shared incident state and per-incident JSON traces
 - LangGraph-first linear pipeline with a local fallback runner
 - CLI and Chainlit entrypoints
-- mock fault scenarios for `postgres_down` and `redis_down`
+- sample alert fixtures for PostgreSQL and Redis incidents
 - live Prometheus, Loki, and Tempo telemetry adapters
 - local observability stack assets and Aspire Shop bootstrap helpers
 - Docker-based PostgreSQL and Redis fault injection helpers
-- quantitative evaluation harness with ground-truth labels
-- qualitative review scoring for evidence grounding, critic caution, and plan traceability
-- automated live telemetry signature validation for the Aspire Shop fault scenarios
+- automated live telemetry signature validation profiles for PostgreSQL and Redis faults
 - OpenAI-backed Analyst, Critic, Planner, and follow-up responses when a local key is present
 
 Still open:
@@ -65,20 +63,20 @@ Notes:
 - if model calls are slow in your environment, raise `IIRS_OPENAI_TIMEOUT_SECONDS` to `90` or higher
 - Retriever remains deterministic today
 
-## Fastest path: mock end-to-end
+## Fastest path: alert-fixture end-to-end
 
-Run the built-in scenarios:
-
-```bash
-iirs run --scenario postgres_down --show-trace
-iirs run --scenario redis_down --show-trace
-```
-
-Or run from alert fixtures:
+Run the sample alert fixtures:
 
 ```bash
 iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace
 iirs run --alert-file fixtures/alerts/redis_down.json --show-trace
+```
+
+Or create a one-off live-style alert from a summary:
+
+```bash
+iirs run --summary "catalogservice is timing out and PostgreSQL looks down" --service catalogservice --show-trace
+iirs run --summary "basketservice cannot reach Redis and cart calls are failing" --service basketservice --show-trace
 ```
 
 What you should see:
@@ -98,12 +96,12 @@ Verify the configured model path first:
 iirs llm-check
 ```
 
-Then ask a follow-up question against a scenario from the CLI:
+Then ask a follow-up question against a sample alert from the CLI:
 
 ```bash
-iirs ask --scenario postgres_down "How sure are we?"
-iirs ask --scenario postgres_down "Did a deploy cause this?"
-iirs ask --scenario redis_down "What should I do first?"
+iirs ask --alert-file fixtures/alerts/postgres_down.json "How sure are we?"
+iirs ask --alert-file fixtures/alerts/postgres_down.json "Did a deploy cause this?"
+iirs ask --alert-file fixtures/alerts/redis_down.json "What should I do first?"
 ```
 
 If the model is unavailable, these commands should fail cleanly instead of silently falling back to a weaker answer.
@@ -117,8 +115,8 @@ chainlit run chainlit_app.py --port 8000
 
 Useful prompt styles:
 
-1. shortcuts: `postgres_down` or `redis_down`
-2. dependency-shaped incidents: `catalogservice is timing out and PostgreSQL looks down`
+1. dependency-shaped incidents: `catalogservice is timing out and PostgreSQL looks down`
+2. cache/cart incidents: `basketservice cannot reach Redis and cart calls are failing`
 3. broad live diagnosis: `what broke in aspire shop right now?`
 4. broad health checks: `is everything healthy or broken right now?` or `can you check the health of aspireshop?`
 5. user-facing page issues: `the aspire shop page is not loading at all`
@@ -127,40 +125,18 @@ Useful prompt styles:
 
 Notes:
 
+- plain-English text is treated as a new incident prompt instead of being routed through hidden demo shortcuts
 - broad health-check prompts use a safer `live-health-check` mode that prefers `No clear live fault detected` when runtime state is green
 - short follow-ups are resolved against the current incident state instead of starting a new run
 - if a model-backed stage fails, Chainlit stops that run and shows the model error instead of silently falling back
 
-### Evaluation
-
-Run the quantitative harness:
-
-```bash
-iirs eval --runs 3
-```
-
-Useful variants:
-
-```bash
-iirs eval --scenario postgres_down --runs 5
-iirs eval --runs 3 --format json
-```
-
-The evaluation harness checks:
-
-- Top-1 root-cause accuracy
-- Top-3 root-cause accuracy
-- required evidence-source coverage
-- required action-type and action-keyword coverage
-- qualitative review score for evidence grounding, critic caution, and plan safety/traceability
-
-Ground-truth labels live in `fixtures/ground_truth/`.
+### Live signature validation
 
 Run the live signature validator after reproducing a real local fault:
 
 ```bash
-iirs verify-live --scenario postgres_down
-iirs verify-live --scenario redis_down
+iirs verify-live --profile postgres_down
+iirs verify-live --profile redis_down
 ```
 
 Useful variants:
@@ -299,8 +275,8 @@ Live-mode checks:
 Validate the live fault signatures directly:
 
 ```bash
-iirs verify-live --scenario postgres_down
-iirs verify-live --scenario redis_down
+iirs verify-live --profile postgres_down
+iirs verify-live --profile redis_down
 ```
 
 ## Fault injection
@@ -362,7 +338,7 @@ Inspect trace artifacts:
 
 ```bash
 ls traces
-rg -n '"used_langgraph"|"scenario_name"|"source_type"' traces/*.json
+rg -n '"used_langgraph"|"incident_id"|"source_type"' traces/*.json
 ```
 
 If you want the pipeline to stay fully deterministic even with `.env.local` present:
@@ -382,7 +358,7 @@ General:
 
 Telemetry:
 
-- `IIRS_TELEMETRY_BACKEND`: `mock` or `plt`
+- `IIRS_TELEMETRY_BACKEND`: `plt`
 - `IIRS_PROMETHEUS_URL`
 - `IIRS_LOKI_URL`
 - `IIRS_TEMPO_URL`
@@ -412,7 +388,7 @@ Fault injection:
 - `infra/observability/`: Prometheus, Loki, Tempo, and OTel Collector config
 - `runbooks/`: static troubleshooting docs used by Retriever
 - `fixtures/alerts/`: sample alert payloads
-- `fixtures/ground_truth/`: evaluation labels
+- `fixtures/live_signatures/`: live validation profiles
 - `scripts/`: observability, Aspire Shop, and fault-injection helpers
 - `tests/`: unit and integration coverage
 - `docs/implementation-status.md`: implementation status against issue #1

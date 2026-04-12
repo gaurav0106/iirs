@@ -16,7 +16,7 @@ from iirs.llm import OpenAIRequestError
 from iirs.models import ConversationTurn
 from iirs.pipeline import IIRSPipeline
 from iirs.present import render_brief_markdown
-from iirs.utils import unique_suffix, utc_now
+from iirs.utils import utc_now
 
 
 async def _stream_markdown(content: str, *, delay: float = 0.02) -> None:
@@ -40,44 +40,11 @@ def _extract_json_payload(message: str) -> str | None:
     return None
 
 
-def _infer_scenario_from_text(text: str) -> str | None:
-    lowered = f" {text.lower()} "
-    postgres_terms = {
-        "postgres": 5,
-        "postgresql": 5,
-        "database": 4,
-        " db ": 3,
-        "npgsql": 5,
-        "entityframework": 3,
-        "entity framework": 3,
-        "sql": 2,
-    }
-    redis_terms = {
-        "redis": 5,
-        "cache": 4,
-        "checkout cart": 2,
-        "session": 2,
-        "stackexchange.redis": 5,
-        "keyspace": 2,
-    }
-
-    postgres_score = sum(weight for term, weight in postgres_terms.items() if term in lowered)
-    redis_score = sum(weight for term, weight in redis_terms.items() if term in lowered)
-
-    if postgres_score == 0 and redis_score == 0:
-        return None
-    if postgres_score and redis_score and abs(postgres_score - redis_score) <= 2:
-        return None
-    if postgres_score >= redis_score:
-        return "postgres_down"
-    return "redis_down"
-
-
 def _infer_service_from_text(text: str) -> str | None:
     lowered = f" {text.lower()} "
     service_terms = {
         "catalogservice": (" catalogservice ", " catalog service ", " catalog ", " inventory ", " product page "),
-        "basketservice": (" basketservice ", " basket service ", " basket ", " cart ", " checkout cart "),
+        "basketservice": (" basketservice ", " basket service ", " basket ", " cart ", " checkout ", " checkout cart "),
         "frontend": (
             " frontend ",
             " front end ",
@@ -100,45 +67,13 @@ def _infer_service_from_text(text: str) -> str | None:
     return best_service if scores[best_service] > 0 else None
 
 
-def _looks_like_live_diagnosis_request(text: str) -> bool:
-    lowered = text.lower()
-    signals = (
-        "what's wrong",
-        "whats wrong",
-        "what broke",
-        "is it down",
-        "down?",
-        "broken",
-        "failing",
-        "failure",
-        "health",
-        "healthy",
-        "unhealthy",
-        "working",
-        "status",
-        "diagnose",
-        "investigate",
-        "timeout",
-        "error",
-        "issue",
-        "problem",
-        "outage",
-        "not loading",
-        "won't load",
-        "wont load",
-        "not opening",
-        "won't open",
-        "wont open",
-        "blank page",
-        "white screen",
-    )
-    return any(signal in lowered for signal in signals)
-
-
 def _looks_like_health_check_request(text: str) -> bool:
     lowered = " ".join(text.lower().split())
     phrases = (
         "healthy or broken",
+        "healthy or having issues",
+        "healthy or has issues",
+        "healthy or not",
         "is everything healthy",
         "is everything broken",
         "is everything okay",
@@ -248,60 +183,35 @@ def _looks_like_explicit_follow_up(text: str) -> bool:
     return any(signal in lowered for signal in signals)
 
 
-def _chat_incident_suffix(timestamp: str) -> str:
-    return f"{timestamp.replace(':', '').replace('-', '').replace('+00:00', 'Z')}-{unique_suffix()}"
-
-
 def _build_freeform_alert(message: str, pipeline: IIRSPipeline):
-    scenario_name = _infer_scenario_from_text(message)
     cleaned = " ".join(message.strip().split())
-    inferred_service = _infer_service_from_text(message)
-
-    if scenario_name is not None:
-        alert = pipeline.build_alert_for_scenario(scenario_name)
-        if cleaned:
-            timestamp = utc_now()
-            alert.summary = cleaned
-            alert.started_at = timestamp
-            alert.incident_id = f"{scenario_name}-chat-{_chat_incident_suffix(timestamp)}"
-            alert.labels = {**alert.labels, "source": "chat-freeform", "mode": "scenario-triage"}
-        return alert
-
     if not cleaned:
         return None
-    if _looks_like_health_check_request(cleaned):
-        return pipeline.build_live_alert(
-            cleaned,
-            service=inferred_service,
-            mode="live-health-check",
-        )
-    if inferred_service is not None or _looks_like_live_diagnosis_request(cleaned):
-        return pipeline.build_live_alert(cleaned, service=inferred_service)
-    return None
+    inferred_service = _infer_service_from_text(cleaned)
+    return pipeline.build_live_alert(
+        cleaned,
+        service=inferred_service,
+        mode="live-health-check" if _looks_like_health_check_request(cleaned) else "live-diagnosis",
+    )
 
 
 def _parse_user_alert(message: str, pipeline: IIRSPipeline):
     text = message.strip()
-    lowered = text.lower()
     if json_payload := _extract_json_payload(text):
         return pipeline.parse_alert_json(json_payload)
-    if lowered == "postgres_down":
-        return pipeline.build_alert_for_scenario("postgres_down")
-    if lowered == "redis_down":
-        return pipeline.build_alert_for_scenario("redis_down")
     return _build_freeform_alert(text, pipeline)
 
 
 def _classify_user_message(message: str, pipeline: IIRSPipeline, *, has_last_state: bool):
-    if has_last_state and _looks_like_contextual_follow_up(message):
+    if has_last_state and (
+        _looks_like_contextual_follow_up(message)
+        or _looks_like_explicit_follow_up(message)
+    ):
         return "follow-up", None
 
     alert = _parse_user_alert(message, pipeline)
     if alert is not None:
         return "incident", alert
-
-    if has_last_state and _looks_like_explicit_follow_up(message):
-        return "follow-up", None
 
     return "unknown", None
 
@@ -323,8 +233,8 @@ async def on_chat_start() -> None:
     cl.user_session.set("last_state", None)
     await cl.Message(
         content=(
-            "Send `postgres_down`, `redis_down`, a plain-English incident description, or an alert JSON payload. "
-            "You can also ask broad live questions like `is everything healthy or broken right now?`. "
+            "Send a plain-English incident description or an alert JSON payload. "
+            "The app treats ordinary text as a new incident prompt and broad health prompts as live health checks. "
             "The UI will show Retriever, Analyst, Critic, and Planner handoffs in sequence. "
             "After that, ask normal follow-up questions like `how sure are we?`, "
             "`why?`, `show me the evidence`, or `then what?`."
@@ -366,8 +276,7 @@ async def on_message(message: cl.Message) -> None:
             "- `basketservice cannot reach Redis and cart calls are failing`\n"
             "- `the catalog page spins forever and DB connections keep failing`\n"
             "- `the aspire shop page is not loading at all`\n"
-            "- `cart is broken, cache lookups are timing out`\n"
-            "- `postgres_down` or `redis_down` for the demo shortcuts",
+            "- `cart is broken, cache lookups are timing out`",
             delay=0.008,
         )
         return

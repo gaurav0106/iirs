@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 from chainlit_app import _classify_user_message, _looks_like_contextual_follow_up, _parse_user_alert
 from iirs.config import Settings
 from iirs.pipeline import IIRSPipeline
+from tests.helpers import NoopTelemetryBackend
 
 
 class ChainlitInputParsingTests(unittest.TestCase):
@@ -26,10 +27,10 @@ class ChainlitInputParsingTests(unittest.TestCase):
                 trace_dir=self.trace_dir,
                 runbooks_dir=ROOT / "runbooks",
                 fixtures_dir=ROOT / "fixtures" / "alerts",
-                ground_truth_dir=ROOT / "fixtures" / "ground_truth",
                 prefer_langgraph=False,
                 openai_enabled=False,
-            )
+            ),
+            telemetry_backend=NoopTelemetryBackend(),
         )
 
     def test_parse_user_alert_accepts_freeform_postgres_description(self) -> None:
@@ -39,14 +40,16 @@ class ChainlitInputParsingTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(alert)
-        self.assertEqual(alert.scenario, "postgres_down")
+        self.assertIsNone(alert.scenario)
+        self.assertEqual(alert.service, "catalogservice")
         self.assertIn("catalogservice is timing out", alert.summary)
-        self.assertEqual(alert.labels.get("source"), "chat-freeform")
-        self.assertTrue(alert.incident_id.startswith("postgres_down-chat-"))
+        self.assertEqual(alert.labels.get("source"), "chat-live")
+        self.assertEqual(alert.labels.get("mode"), "live-diagnosis")
+        self.assertTrue(alert.incident_id.startswith("live-chat-"))
 
-    def test_parse_user_alert_assigns_unique_incident_ids_for_repeated_freeform_scenarios(self) -> None:
-        with patch("chainlit_app.utc_now", return_value="2026-04-11T12:00:00+00:00"):
-            with patch("chainlit_app.unique_suffix", side_effect=["first123", "second45"]):
+    def test_parse_user_alert_assigns_unique_incident_ids_for_repeated_freeform_prompts(self) -> None:
+        with patch("iirs.pipeline.utc_now", return_value="2026-04-11T12:00:00+00:00"):
+            with patch("iirs.pipeline.unique_suffix", side_effect=["first123", "second45"]):
                 first = _parse_user_alert(
                     "catalogservice is timing out and PostgreSQL looks down",
                     self.pipeline,
@@ -89,7 +92,8 @@ class ChainlitInputParsingTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(alert)
-        self.assertEqual(alert.scenario, "postgres_down")
+        self.assertIsNone(alert.scenario)
+        self.assertEqual(alert.service, "catalogservice")
 
     def test_parse_user_alert_accepts_curveball_redis_description(self) -> None:
         alert = _parse_user_alert(
@@ -98,7 +102,8 @@ class ChainlitInputParsingTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(alert)
-        self.assertEqual(alert.scenario, "redis_down")
+        self.assertIsNone(alert.scenario)
+        self.assertEqual(alert.service, "basketservice")
 
     def test_parse_user_alert_builds_live_diagnosis_alert_for_generic_breakage(self) -> None:
         alert = _parse_user_alert(
@@ -141,6 +146,17 @@ class ChainlitInputParsingTests(unittest.TestCase):
     def test_parse_user_alert_builds_live_health_check_alert_for_health_check_phrase(self) -> None:
         alert = _parse_user_alert(
             "can you check the health of aspireshop?",
+            self.pipeline,
+        )
+
+        self.assertIsNotNone(alert)
+        self.assertIsNone(alert.scenario)
+        self.assertEqual(alert.service, "aspire-shop")
+        self.assertEqual(alert.labels.get("mode"), "live-health-check")
+
+    def test_parse_user_alert_builds_live_health_check_alert_for_healthy_or_having_issues_phrase(self) -> None:
+        alert = _parse_user_alert(
+            "is the aspireshop healthy or having issues?",
             self.pipeline,
         )
 
@@ -194,8 +210,9 @@ class ChainlitInputParsingTests(unittest.TestCase):
             has_last_state=True,
         )
 
-        self.assertEqual(kind, "unknown")
-        self.assertIsNone(alert)
+        self.assertEqual(kind, "incident")
+        self.assertIsNotNone(alert)
+        self.assertEqual(alert.service, "basketservice")
 
 
 if __name__ == "__main__":
