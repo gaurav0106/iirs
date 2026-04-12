@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 import io
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -16,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from iirs.backends import TelemetryConfigurationError, TelemetryRequestError
 from iirs.cli import main
+from iirs.config import Settings
 from iirs.llm import OpenAIRequestError
 from iirs.models import AgentRun, AlertPayload, IncidentBrief, PlanStep, Hypothesis
 
@@ -195,6 +197,57 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertIn("Telemetry failed; stopping cleanly", stdout.getvalue())
+
+    def test_eval_command_prints_markdown_report(self) -> None:
+        stdout = io.StringIO()
+        settings = Settings(
+            trace_dir=ROOT / "traces" / "cli-eval-output",
+            runbooks_dir=ROOT / "runbooks",
+            fixtures_dir=ROOT / "fixtures" / "alerts",
+            prefer_langgraph=False,
+            openai_enabled=False,
+        )
+        with patch("iirs.cli.load_settings", return_value=settings):
+            with redirect_stdout(stdout):
+                rc = main(["eval", "--suite", "routing", "--case", "health-check-aspireshop"])
+
+        self.assertEqual(rc, 0)
+        self.assertIn("# IIRS Eval Report", stdout.getvalue())
+        self.assertIn("health-check-aspireshop", stdout.getvalue())
+
+    def test_eval_command_prints_json_report(self) -> None:
+        stdout = io.StringIO()
+        settings = Settings(
+            trace_dir=ROOT / "traces" / "cli-eval-json-output",
+            runbooks_dir=ROOT / "runbooks",
+            fixtures_dir=ROOT / "fixtures" / "alerts",
+            prefer_langgraph=False,
+            openai_enabled=False,
+        )
+        with patch("iirs.cli.load_settings", return_value=settings):
+            with redirect_stdout(stdout):
+                rc = main(["eval", "--suite", "routing", "--case", "health-check-aspireshop", "--format", "json"])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(rc, 0)
+        self.assertTrue(payload["passed"])
+        self.assertEqual(payload["suite_results"][0]["case_results"][0]["case_name"], "health-check-aspireshop")
+
+    def test_eval_command_fails_cleanly_for_unknown_case(self) -> None:
+        stdout = io.StringIO()
+        settings = Settings(
+            trace_dir=ROOT / "traces" / "cli-eval-failure-output",
+            runbooks_dir=ROOT / "runbooks",
+            fixtures_dir=ROOT / "fixtures" / "alerts",
+            prefer_langgraph=False,
+            openai_enabled=False,
+        )
+        with patch("iirs.cli.load_settings", return_value=settings):
+            with redirect_stdout(stdout):
+                rc = main(["eval", "--suite", "routing", "--case", "does-not-exist"])
+
+        self.assertEqual(rc, 1)
+        self.assertIn("Eval setup failed", stdout.getvalue())
 
 
 if __name__ == "__main__":

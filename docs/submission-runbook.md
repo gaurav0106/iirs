@@ -3,7 +3,7 @@
 This document is the reproducible path for:
 
 1. local setup
-2. mock validation
+2. alert-fixture validation
 3. live PostgreSQL and Redis fault E2E validation
 4. optional agent runs over the live fault window
 5. building the final submission zip
@@ -12,16 +12,18 @@ The safest default is to submit a zip that works without an OpenAI key. The Open
 
 ## What The Agent Actually Does
 
-There are two separate flows in this repo:
+There are three complementary flows in this repo:
 
+- `iirs eval`: runs the reproducible offline routing and fixture-backed pipeline regression suites. Use this to prove prompt/routing/ranking behavior without needing live telemetry.
 - `iirs verify-live`: checks whether Loki, Prometheus, and Tempo expose the expected live fault signals. This validates telemetry collection and live query correctness. It does not use the LLM reasoning path.
 - `iirs run`: runs the `Retriever -> Analyst -> Critic -> Planner` pipeline. This is the actual incident-analysis flow. The Retriever is deterministic. Analyst, Critic, Planner, and follow-up answers can use OpenAI when enabled.
 
 Recommended order:
 
-1. reproduce the fault
-2. run `verify-live`
-3. run `iirs run` against that same live time window if you want the agent output
+1. run `iirs eval`
+2. reproduce the fault
+3. run `iirs verify-live`
+4. run `iirs run` against that same live time window if you want the agent output
 
 ## Prerequisites
 
@@ -83,12 +85,13 @@ These commands produce simple artifacts that are useful to include in the zip.
 
 ```bash
 ./.venv/bin/python -m unittest discover -s tests | tee submission_artifacts/unittest.txt
+./.venv/bin/iirs eval | tee submission_artifacts/eval_report.txt
 ./.venv/bin/iirs run --alert-file fixtures/alerts/postgres_down.json --show-trace | tee submission_artifacts/postgres_fixture.txt
 ./.venv/bin/iirs run --alert-file fixtures/alerts/redis_down.json --show-trace | tee submission_artifacts/redis_fixture.txt
 ./.venv/bin/iirs verify-live --profile postgres_down | tee submission_artifacts/verify_live_postgres_profile.txt
 ```
 
-These artifacts show the deterministic alert-fixture flow plus the live-signature validator.
+These artifacts show the offline eval suite, the deterministic alert-fixture flow, and the live-signature validator.
 
 If the live rehearsal reproduces the fault but one telemetry check stays flaky, the best fallback is to show the saved live rehearsal output and then switch immediately to:
 

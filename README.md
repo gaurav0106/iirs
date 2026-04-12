@@ -13,6 +13,7 @@ Implemented:
 - live Prometheus, Loki, and Tempo telemetry adapters
 - local observability stack assets and Aspire Shop bootstrap helpers
 - Docker-based PostgreSQL and Redis fault injection helpers
+- rubric-based routing and fixture regression evaluation via `iirs eval`
 - automated live telemetry signature validation profiles for PostgreSQL and Redis faults
 - OpenAI-backed Analyst, Critic, Planner, and follow-up responses when a local key is present
 
@@ -88,6 +89,29 @@ What you should see:
 
 When you pass `--show-trace`, each stage is labeled as `[tooling]`, `[model]`, or `[deterministic]` so you can tell whether the run actually used the LLM.
 
+### Regression evals
+
+Run the first-class offline eval suite:
+
+```bash
+iirs eval
+```
+
+Useful variants:
+
+```bash
+iirs eval --suite routing
+iirs eval --suite pipeline --case healthy-live-health-check
+iirs eval --format json
+```
+
+What this covers today:
+
+- **routing**: broad health checks, frontend/page phrasing, explicit follow-ups, and “new incident despite prior state” prompts
+- **pipeline**: PostgreSQL and Redis fixture regressions plus live-style health-check and missing-service ranking checks
+
+Use `iirs eval` for reproducible regression checks on prompts, routing, ranking, approval boundaries, and traces. Use `iirs verify-live` separately when you need to validate real PLT telemetry availability against a reproduced fault window.
+
 ### Real LLM smoke check
 
 Verify the configured model path first:
@@ -146,7 +170,7 @@ iirs verify-live --started-at 2026-04-06T12:00:00Z --window-minutes 20
 iirs verify-live --format json
 ```
 
-The live signature validator checks that the PLT backend can retrieve the expected Loki, Prometheus, and Tempo signals for the active fault window.
+The live signature validator checks that the PLT backend can retrieve the expected Loki, Prometheus, and Tempo signals for the active fault window. It complements `iirs eval` instead of replacing it: `iirs eval` scores reasoning behavior on reproducible offline cases, while `verify-live` validates live telemetry collection.
 
 ## Live local stack
 

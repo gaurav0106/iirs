@@ -6,6 +6,7 @@ import sys
 
 from .backends import TelemetryConfigurationError, TelemetryRequestError
 from .config import load_settings
+from .evals import render_eval_json, render_eval_markdown, run_evals
 from .llm import OpenAIConfigurationError, OpenAIRequestError, build_reasoning_client
 from .live_signatures import (
     LiveSignatureHarness,
@@ -107,6 +108,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify that the configured OpenAI-backed reasoning client is reachable.",
     )
 
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Run rubric-based routing and pipeline regression suites against fixture-backed data.",
+    )
+    eval_parser.add_argument(
+        "--suite",
+        action="append",
+        choices=["routing", "pipeline"],
+        help="Eval suite to run. Repeat to select multiple suites. Defaults to all suites.",
+    )
+    eval_parser.add_argument(
+        "--case",
+        action="append",
+        help="Specific eval case to run. Repeat to select multiple cases across the selected suites.",
+    )
+    eval_parser.add_argument(
+        "--format",
+        choices=["markdown", "json"],
+        default="markdown",
+        help="Output format for the eval report.",
+    )
+
     live_parser = subparsers.add_parser(
         "verify-live",
         help="Validate live telemetry signatures for built-in fault profiles against the PLT backend.",
@@ -187,6 +210,23 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(message)
         return 0
+
+    if args.command == "eval":
+        try:
+            report = run_evals(
+                load_settings(),
+                suite_names=args.suite,
+                case_names=args.case,
+            )
+        except (OpenAIConfigurationError, KeyError) as exc:
+            print(f"Eval setup failed: {exc}")
+            return 1
+
+        if args.format == "json":
+            print(render_eval_json(report))
+        else:
+            print(render_eval_markdown(report))
+        return 0 if report.passed else 1
 
     if args.command == "run":
         pipeline = IIRSPipeline()

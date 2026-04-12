@@ -410,6 +410,11 @@
 
 /* ── State flow ── */
 .state-flow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.45em;
   text-align: center;
   margin: 0.8em 0;
   font-size: 0.7em;
@@ -419,9 +424,39 @@
 
 .state-flow code {
   font-size: 0.92em;
+  border: 1px solid var(--border);
+  background: var(--surface-alt);
+  padding: 0.2em 0.55em;
+}
+
+.state-arrow {
+  color: var(--text-dim);
+  font-size: 1.1em;
+}
+
+.state-flow .state-alert,
+.state-flow .state-evidence {
   color: var(--accent);
-  border-color: transparent;
-  background: transparent;
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.state-flow .state-hypothesis {
+  color: var(--purple);
+  border-color: rgba(167, 139, 250, 0.45);
+  background: rgba(167, 139, 250, 0.08);
+}
+
+.state-flow .state-critique {
+  color: var(--amber);
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.state-flow .state-brief {
+  color: var(--green);
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.08);
 }
 
 /* ── Evidence grid ── */
