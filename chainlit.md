@@ -4,8 +4,6 @@ Use this Chainlit app to run the IIRS incident pipeline locally.
 
 Try one of these inputs:
 
-- `postgres_down`
-- `redis_down`
 - `catalogservice is timing out and PostgreSQL looks down`
 - `basketservice cannot reach Redis and cart calls are failing`
 - `what broke in aspire shop right now?`
@@ -23,8 +21,7 @@ The UI shows staged handoffs for:
 
 Prompt routing rules:
 
-- `postgres_down` / `redis_down` use the built-in demo scenarios
-- Postgres/Redis-shaped natural language routes into scenario triage
+- plain-English incident text becomes a new incident prompt
 - broad breakage prompts route into live diagnosis
 - broad health prompts route into a safer live health-check mode
 - page/site-not-loading prompts bias toward `frontend`
