@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IIRS Viva Prep</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">IIRS capstone defense</p>
+        <h1>Defense Prep</h1>
+      </div>
+      <div class="topbar-stats" aria-label="Study stats">
+        <div><strong id="totalCount">58</strong><span>questions</span></div>
+        <div><strong id="reviewedCount">0</strong><span>reviewed</span></div>
+        <div><strong>46/46</strong><span>offline checks</span></div>
+      </div>
+    </header>
+
+    <main>
+      <section class="system-band" aria-label="Project snapshot">
+        <div class="snapshot">
+          <p class="section-kicker">Defense thesis</p>
+          <h2>The system turns incident evidence into a traceable brief, while keeping risky actions human-approved.</h2>
+          <p>
+            Built from the current repo, study guide, proposal, and presentation. The answers separate what is implemented today
+            from what belongs to future production hardening.
+          </p>
+        </div>
+        <div class="system-map" aria-label="IIRS architecture diagram">
+          <div class="map-row map-user">
+            <span>Chainlit UI</span>
+            <span>CLI</span>
+          </div>
+          <div class="map-line"></div>
+          <div class="map-row map-pipeline">
+            <span>Retriever</span>
+            <span>Analyst</span>
+            <span>Critic</span>
+            <span>Planner</span>
+          </div>
+          <div class="map-line"></div>
+          <div class="map-row map-data">
+            <span>Prometheus</span>
+            <span>Loki</span>
+            <span>Tempo</span>
+            <span>Runbooks</span>
+          </div>
+          <div class="map-caption">Aspire Shop telemetry via OpenTelemetry Collector</div>
+        </div>
+      </section>
+
+      <section class="facts-strip" aria-label="Fast facts">
+        <div><span>Pipeline</span><strong>Retriever -> Analyst -> Critic -> Planner</strong></div>
+        <div><span>Target app</span><strong>Aspire Shop microservices</strong></div>
+        <div><span>Telemetry</span><strong>Prometheus, Loki, Tempo</strong></div>
+        <div><span>Verified locally</span><strong>Deterministic eval passes 2/2 suites, 9/9 cases, 46/46 checks</strong></div>
+      </section>
+
+      <section id="resources" class="presentation-kit" aria-labelledby="resourcesHeading">
+        <div class="kit-heading">
+          <p class="section-kicker">Presentation kit</p>
+          <h2 id="resourcesHeading">Deck, readout, and verified result captures</h2>
+        </div>
+        <div class="resource-list">
+          <a href="resources/IIRS_Presentation_Improved.pptx" download>
+            <span class="resource-type">PPTX</span>
+            <strong>Improved presentation</strong>
+            <span>11 slides</span>
+          </a>
+          <a href="resources/IIRS_15min_Readout_Script.html">
+            <span class="resource-type">HTML</span>
+            <strong>15-minute team readout</strong>
+            <span>7 speakers</span>
+          </a>
+          <a href="resources/result-captures/">
+            <span class="resource-type">VIEW</span>
+            <strong>Result comparison</strong>
+            <span>Healthy + failure</span>
+          </a>
+          <a href="resources/result-captures/healthy-result.png">
+            <span class="resource-type">PNG</span>
+            <strong>Healthy-case capture</strong>
+            <span>0.70 confidence</span>
+          </a>
+          <a href="resources/result-captures/failure-result.png">
+            <span class="resource-type">PNG</span>
+            <strong>Failure-case capture</strong>
+            <span>0.87 confidence</span>
+          </a>
+        </div>
+      </section>
+
+      <section class="controls" aria-label="Question controls">
+        <label class="search-box">
+          <span>Search</span>
+          <input id="searchInput" type="search" placeholder="Try LangGraph, hallucination, eval, Redis">
+        </label>
+        <div>
+          <span class="control-label">Category</span>
+          <div id="categoryFilters" class="filter-row"></div>
+        </div>
+        <div>
+          <span class="control-label">Difficulty</span>
+          <div id="difficultyFilters" class="filter-row compact"></div>
+        </div>
+        <div class="command-row">
+          <button id="expandAll" type="button">Expand all</button>
+          <button id="collapseAll" type="button">Collapse all</button>
+          <button id="resetReviewed" type="button">Reset reviewed</button>
+        </div>
+      </section>
+
+      <section class="answer-mode" aria-label="Question view">
+        <div>
+          <h2 id="resultHeading">All Questions</h2>
+          <p id="resultMeta">58 focused questions, weighted toward intermediate and advanced defense prep.</p>
+        </div>
+        <div class="view-actions">
+          <div class="view-tabs" role="tablist" aria-label="Study view">
+            <button id="browseView" type="button" role="tab" aria-selected="true">Browse</button>
+            <button id="practiceView" type="button" role="tab" aria-selected="false">Practice</button>
+          </div>
+          <div id="practiceControls" class="practice-controls" hidden>
+            <button id="previousQuestion" type="button">Previous</button>
+            <span id="practiceProgress" aria-live="polite">1 / 58</span>
+            <button id="randomQuestion" type="button">Random</button>
+            <button id="nextQuestion" type="button">Next</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="questionGrid" class="question-grid" aria-live="polite"></section>
+    </main>
+
+    <template id="questionTemplate">
+      <article class="qa-card">
+        <div class="card-head">
+          <div>
+            <p class="card-meta"></p>
+            <h3></h3>
+          </div>
+          <button class="review-toggle" type="button"></button>
+        </div>
+        <details>
+          <summary>Answer</summary>
+          <div class="answer"></div>
+        </details>
+        <div class="say-block"></div>
+        <div class="trap-block"></div>
+      </article>
+    </template>
+
+    <script src="app.js"></script>
+  </body>
+</html>

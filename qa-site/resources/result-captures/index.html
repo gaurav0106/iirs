@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IIRS Result Captures</title>
+  <link rel="icon" type="image/svg+xml" href="../../favicon.svg">
+  <style>
+    :root {
+      --ink: #17202a;
+      --muted: #5c6875;
+      --line: #dce3e8;
+      --surface: #ffffff;
+      --page: #edf1f3;
+      --teal: #0b7285;
+      --teal-soft: #e3f2f4;
+      --green: #26734d;
+      --green-soft: #e8f4ed;
+      --amber: #8a5b12;
+      --amber-soft: #fbf1dc;
+      --red: #9a3732;
+      --red-soft: #fae9e7;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+
+    .controls {
+      width: 1600px;
+      margin: 24px auto 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .controls button {
+      border: 1px solid #b7c2ca;
+      background: var(--surface);
+      color: var(--ink);
+      min-width: 150px;
+      padding: 12px 18px;
+      border-radius: 6px;
+      font: 600 17px/1 "Segoe UI", Arial, sans-serif;
+      cursor: pointer;
+    }
+
+    .controls button[aria-selected="true"] {
+      background: var(--ink);
+      border-color: var(--ink);
+      color: white;
+    }
+
+    .capture-frame {
+      width: 1600px;
+      height: 900px;
+      margin: 0 auto 24px;
+      overflow: hidden;
+      background: var(--surface);
+      position: relative;
+    }
+
+    .topline {
+      height: 122px;
+      background: var(--ink);
+      color: white;
+      padding: 26px 58px 22px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: #b9e2e7;
+      font: 700 17px/1.2 Consolas, monospace;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 43px;
+      line-height: 1.08;
+      letter-spacing: 0;
+    }
+
+    .run-mode {
+      display: grid;
+      grid-template-columns: repeat(4, auto);
+      gap: 7px;
+      align-items: center;
+    }
+
+    .run-mode span {
+      border: 1px solid #53616c;
+      padding: 9px 12px;
+      border-radius: 5px;
+      font: 600 15px/1 Consolas, monospace;
+      color: #e5ebef;
+    }
+
+    .run-mode span:first-child { border-color: #4fb3bf; color: #b9eef3; }
+
+    .content { padding: 34px 58px 38px; }
+
+    .verdict {
+      min-height: 174px;
+      display: grid;
+      grid-template-columns: 1fr 250px;
+      gap: 34px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 30px;
+    }
+
+    .verdict-label {
+      margin: 0 0 9px;
+      color: var(--teal);
+      font: 700 17px/1.2 Consolas, monospace;
+      text-transform: uppercase;
+    }
+
+    .verdict h2 {
+      margin: 0 0 12px;
+      font-size: 39px;
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .verdict p {
+      margin: 0;
+      max-width: 1050px;
+      color: var(--muted);
+      font-size: 22px;
+      line-height: 1.38;
+    }
+
+    .confidence {
+      height: 128px;
+      border-left: 5px solid var(--teal);
+      background: var(--teal-soft);
+      padding: 21px 24px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .confidence strong {
+      font: 700 47px/1 Consolas, monospace;
+      color: var(--teal);
+    }
+
+    .confidence span {
+      margin-top: 9px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .columns {
+      display: grid;
+      grid-template-columns: 1.08fr 0.92fr;
+      gap: 42px;
+      padding-top: 28px;
+    }
+
+    .column + .column {
+      border-left: 1px solid var(--line);
+      padding-left: 42px;
+    }
+
+    h3 {
+      margin: 0 0 16px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    .evidence-list,
+    .action-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 13px;
+    }
+
+    .evidence-list li,
+    .action-list li {
+      min-height: 54px;
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 13px;
+      align-items: start;
+      color: #2f3b45;
+      font-size: 18px;
+      line-height: 1.34;
+    }
+
+    .evidence-list code {
+      color: var(--teal);
+      font: 700 15px/1.34 Consolas, monospace;
+    }
+
+    .index {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      background: #eef2f4;
+      color: var(--ink);
+      font: 700 16px/1 Consolas, monospace;
+    }
+
+    .critic {
+      margin-top: 22px;
+      border-left: 5px solid var(--amber);
+      background: var(--amber-soft);
+      padding: 17px 19px 18px;
+    }
+
+    .critic strong {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--amber);
+      font-size: 17px;
+    }
+
+    .critic p {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.35;
+      color: #4a3b24;
+    }
+
+    .safety {
+      position: absolute;
+      left: 58px;
+      right: 58px;
+      bottom: 28px;
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--line);
+      padding-top: 20px;
+      color: var(--muted);
+      font-size: 17px;
+    }
+
+    .safety strong { color: var(--green); }
+
+    .source {
+      font: 600 14px/1 Consolas, monospace;
+      color: #73808b;
+    }
+
+    .capture-frame[data-case="failure"] .confidence {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .capture-frame[data-case="failure"] .confidence strong { color: var(--red); }
+  </style>
+</head>
+<body>
+  <div class="controls" role="tablist" aria-label="Result case">
+    <button id="healthyTab" type="button" role="tab" aria-selected="true">Healthy case</button>
+    <button id="failureTab" type="button" role="tab" aria-selected="false">Failure case</button>
+  </div>
+
+  <main id="capture" class="capture-frame" data-case="healthy">
+    <header class="topline">
+      <div>
+        <p class="eyebrow" id="caseLabel">Case 1 / Live model-backed run</p>
+        <h1 id="title">Transient high-latency trace</h1>
+      </div>
+      <div class="run-mode" aria-label="Execution modes">
+        <span>Retriever: tooling</span>
+        <span>Analyst: model</span>
+        <span>Critic: model</span>
+        <span>Planner: model</span>
+      </div>
+    </header>
+
+    <div class="content">
+      <section class="verdict">
+        <div>
+          <p class="verdict-label">Top-ranked hypothesis</p>
+          <h2 id="verdict">No clear live fault detected</h2>
+          <p id="summary">One slow request is not enough to prove an outage. Runtime state was green and instant latency was modest, so the system stayed conservative and requested more evidence.</p>
+        </div>
+        <div class="confidence">
+          <strong id="confidence">0.70</strong>
+          <span>relative confidence, not a calibrated probability</span>
+        </div>
+      </section>
+
+      <div class="columns">
+        <section class="column">
+          <h3>Evidence used</h3>
+          <ul id="evidence" class="evidence-list"></ul>
+          <div class="critic">
+            <strong>Critic check</strong>
+            <p id="critic">A single 2.26-second trace still needs span and log correlation before “healthy” is treated as final.</p>
+          </div>
+        </section>
+
+        <section class="column">
+          <h3>Safe next checks</h3>
+          <ol id="actions" class="action-list"></ol>
+        </section>
+      </div>
+    </div>
+
+    <footer class="safety">
+      <span><strong id="safetyLabel">No remediation recommended.</strong> Read-only investigation first; any restart, rollback, failover, or reconfiguration requires approval.</span>
+      <span id="source" class="source">trace: live-chat-20260425...9c1eef3e</span>
+    </footer>
+  </main>
+
+  <script>
+    const cases = {
+      healthy: {
+        label: "Case 1 / Live model-backed run",
+        title: "Transient high-latency trace",
+        verdict: "No clear live fault detected",
+        confidence: "0.70",
+        summary: "One slow request is not enough to prove an outage. Runtime state was green and instant latency was modest, so the system stayed conservative and requested more evidence.",
+        evidence: [
+          ["trace.live.slow.1", "GET / took 2,262 ms in Tempo"],
+          ["runtime.frontend", "frontend process observed running"],
+          ["runtime.postgres", "PostgreSQL container observed up"],
+          ["metric.live.latency.1", "frontend instant latency sample: 72.5 ms"]
+        ],
+        critic: "A single 2.26-second trace still needs span and log correlation before 'healthy' is treated as final.",
+        actions: [
+          "Repeat the request and capture a fresh trace.",
+          "Inspect five-minute latency trends, not one instant sample.",
+          "Correlate the slow trace ID with logs and child spans."
+        ],
+        safety: "No remediation recommended.",
+        source: "trace: live-chat-20260425...9c1eef3e"
+      },
+      failure: {
+        label: "Case 2 / Live model-backed run",
+        title: "Catalog service not observed",
+        verdict: "catalogservice unavailable",
+        confidence: "0.87",
+        summary: "Runtime inspection did not observe catalogservice, so service unavailability ranked first. Recent catalog logs conflict with that signal, so the Critic requires reachability checks before remediation.",
+        evidence: [
+          ["runtime.catalogservice", "process not observed in Docker or local process list"],
+          ["log.runtime.tail...1", "recent database queries were still present"],
+          ["metric.live.latency.1", "catalogservice latency sample was NaN"],
+          ["trace.live.slow.1", "slow frontend request captured in Tempo"]
+        ],
+        critic: "The missing-process signal is strong but not definitive because recent logs exist. Confirm process state and the health endpoint before restart.",
+        actions: [
+          "Confirm the service in Docker and the host process list.",
+          "Call the health endpoint from host and frontend.",
+          "Inspect logs around the suspected stop window."
+        ],
+        safety: "Restart remains approval-gated.",
+        source: "trace: live-chat-20260411...2af84560"
+      }
+    };
+
+    const elements = {
+      capture: document.querySelector("#capture"),
+      caseLabel: document.querySelector("#caseLabel"),
+      title: document.querySelector("#title"),
+      verdict: document.querySelector("#verdict"),
+      confidence: document.querySelector("#confidence"),
+      summary: document.querySelector("#summary"),
+      evidence: document.querySelector("#evidence"),
+      critic: document.querySelector("#critic"),
+      actions: document.querySelector("#actions"),
+      safetyLabel: document.querySelector("#safetyLabel"),
+      source: document.querySelector("#source"),
+      healthyTab: document.querySelector("#healthyTab"),
+      failureTab: document.querySelector("#failureTab")
+    };
+
+    function render(name) {
+      const item = cases[name];
+      elements.capture.dataset.case = name;
+      elements.caseLabel.textContent = item.label;
+      elements.title.textContent = item.title;
+      elements.verdict.textContent = item.verdict;
+      elements.confidence.textContent = item.confidence;
+      elements.summary.textContent = item.summary;
+      elements.critic.textContent = item.critic;
+      elements.safetyLabel.textContent = item.safety;
+      elements.source.textContent = item.source;
+      elements.healthyTab.setAttribute("aria-selected", String(name === "healthy"));
+      elements.failureTab.setAttribute("aria-selected", String(name === "failure"));
+
+      elements.evidence.replaceChildren(...item.evidence.map(([id, text]) => {
+        const li = document.createElement("li");
+        const marker = document.createElement("span");
+        marker.className = "index";
+        marker.textContent = "E";
+        const body = document.createElement("span");
+        const code = document.createElement("code");
+        code.textContent = id;
+        body.append(code, document.createElement("br"), text);
+        li.append(marker, body);
+        return li;
+      }));
+
+      elements.actions.replaceChildren(...item.actions.map((text, index) => {
+        const li = document.createElement("li");
+        const marker = document.createElement("span");
+        marker.className = "index";
+        marker.textContent = String(index + 1);
+        const body = document.createElement("span");
+        body.textContent = text;
+        li.append(marker, body);
+        return li;
+      }));
+    }
+
+    elements.healthyTab.addEventListener("click", () => render("healthy"));
+    elements.failureTab.addEventListener("click", () => render("failure"));
+    render("healthy");
+  </script>
+</body>
+</html>

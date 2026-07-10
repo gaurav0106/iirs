@@ -1,0 +1,442 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IIRS — 15-Min Readout Script</title>
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<style>
+:root{
+  --bg:#F6F7F9; --surface:#FFFFFF; --ink:#1D2530; --muted:#5B6675;
+  --accent:#0E7C86; --accent-ink:#0A5B63; --accent-soft:#E4F0F1;
+  --line:#E2E6EB;
+  --amber:#8F6212; --amber-soft:#FBF3E1; --amber-line:#E8D5A8;
+  --warn:#A93F38; --warn-soft:#F9ECEA; --warn-line:#EACFCB;
+  --pill-bg:#123239; --pill-ink:#D7F1F3;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0F141B; --surface:#161D26; --ink:#E4EAF1; --muted:#9AA6B5;
+    --accent:#4CC3CD; --accent-ink:#8ADCE3; --accent-soft:#12333B;
+    --line:#26303C;
+    --amber:#DFAE55; --amber-soft:#2A2314; --amber-line:#4A3C1C;
+    --warn:#E08B84; --warn-soft:#331B18; --warn-line:#4E2A25;
+    --pill-bg:#0C4A52; --pill-ink:#CFF0F3;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F141B; --surface:#161D26; --ink:#E4EAF1; --muted:#9AA6B5;
+  --accent:#4CC3CD; --accent-ink:#8ADCE3; --accent-soft:#12333B;
+  --line:#26303C;
+  --amber:#DFAE55; --amber-soft:#2A2314; --amber-line:#4A3C1C;
+  --warn:#E08B84; --warn-soft:#331B18; --warn-line:#4E2A25;
+  --pill-bg:#0C4A52; --pill-ink:#CFF0F3;
+}
+:root[data-theme="light"]{
+  --bg:#F6F7F9; --surface:#FFFFFF; --ink:#1D2530; --muted:#5B6675;
+  --accent:#0E7C86; --accent-ink:#0A5B63; --accent-soft:#E4F0F1;
+  --line:#E2E6EB;
+  --amber:#8F6212; --amber-soft:#FBF3E1; --amber-line:#E8D5A8;
+  --warn:#A93F38; --warn-soft:#F9ECEA; --warn-line:#EACFCB;
+  --pill-bg:#123239; --pill-ink:#D7F1F3;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto} }
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-text-size-adjust:100%;
+}
+.wrap{max-width:44rem; margin:0 auto; padding:1.5rem 1.25rem 5rem; display:flex; flex-direction:column; gap:3rem}
+a{color:var(--accent-ink)}
+a:focus-visible, .chip:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:6px}
+
+/* ---------- header ---------- */
+header{display:flex; flex-direction:column; gap:.65rem}
+.eyebrow{font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,monospace; font-size:.72rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent-ink)}
+h1{font-size:1.7rem; line-height:1.2; margin:0; letter-spacing:-.01em; text-wrap:balance}
+.sub{color:var(--muted); font-size:.95rem; line-height:1.55; margin:0}
+.sub strong{color:var(--ink)}
+
+/* ---------- practice rules ---------- */
+.rules{background:var(--surface); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:10px; padding:1.1rem 1.2rem; display:flex; flex-direction:column; gap:.75rem}
+.rules h2{margin:0; font-size:.8rem; letter-spacing:.12em; text-transform:uppercase; color:var(--accent-ink); font-family:ui-monospace,"SF Mono",Consolas,monospace}
+.rules ol{margin:0; padding-left:1.3rem; display:flex; flex-direction:column; gap:.55rem}
+.rules li{line-height:1.6; font-size:1rem}
+
+/* ---------- sticky nav ---------- */
+nav{position:sticky; top:0; z-index:10; background:var(--bg); padding:.6rem 0; margin:-.5rem 0; border-bottom:1px solid var(--line)}
+.chips{display:flex; gap:.45rem; overflow-x:auto; padding-bottom:.15rem; scrollbar-width:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto; font-size:.82rem; font-weight:600; text-decoration:none; color:var(--ink); background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:.35rem .8rem; white-space:nowrap}
+.chip small{color:var(--muted); font-weight:500}
+.chip.qa{color:var(--warn)}
+
+/* ---------- meta zone ---------- */
+.meta{display:flex; flex-direction:column; gap:1.4rem}
+.meta h2{margin:0 0 .6rem; font-size:.8rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); font-family:ui-monospace,"SF Mono",Consolas,monospace}
+.howto ul{margin:0; padding-left:1.25rem; display:flex; flex-direction:column; gap:.45rem}
+.howto li{line-height:1.6; font-size:.96rem; color:var(--ink)}
+.say{display:flex; flex-wrap:wrap; gap:.45rem}
+.say span{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:.3rem .6rem; font-size:.85rem}
+.say b{font-weight:650}
+.say i{font-style:normal; color:var(--muted); font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:.8rem}
+.order{font-size:.95rem; line-height:1.7}
+.order b{color:var(--accent-ink)}
+.tablebox{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; font-size:.88rem}
+th,td{text-align:left; padding:.5rem .8rem; border-bottom:1px solid var(--line); white-space:nowrap}
+tr:last-child td{border-bottom:none}
+th{font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600}
+td.num{font-family:ui-monospace,"SF Mono",Consolas,monospace; font-variant-numeric:tabular-nums}
+
+/* ---------- speaker sections ---------- */
+section.speaker{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:1.5rem 1.35rem 1.6rem; scroll-margin-top:4.2rem}
+.shead{display:flex; align-items:baseline; gap:.9rem; border-bottom:1px solid var(--line); padding-bottom:.9rem; margin-bottom:1.1rem; flex-wrap:wrap}
+.snum{font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:1.5rem; color:var(--accent); font-weight:700}
+.sname{flex:1 1 auto}
+.sname h2{margin:0; font-size:1.22rem; letter-spacing:-.01em}
+.sname p{margin:.15rem 0 0; color:var(--muted); font-size:.86rem}
+.stime{font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:1rem; font-weight:700; color:var(--pill-ink); background:var(--pill-bg); border-radius:8px; padding:.3rem .6rem; font-variant-numeric:tabular-nums}
+.speech p{font-family:Charter,Georgia,"Times New Roman",serif; font-size:1.16rem; line-height:1.8; margin:0 0 1.05rem}
+.speech p:last-of-type{margin-bottom:0}
+.t{display:inline-block; font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:.78rem; font-weight:600; color:var(--pill-ink); background:var(--pill-bg); border-radius:6px; padding:.1rem .45rem; margin-right:.45rem; vertical-align:.12em; font-variant-numeric:tabular-nums}
+.buffer{margin-top:1.25rem; background:var(--amber-soft); border:1.5px dashed var(--amber-line); border-radius:10px; padding:.9rem 1rem}
+.buffer .blabel{display:block; font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--amber); margin-bottom:.4rem; font-weight:700}
+.buffer p{margin:0; font-family:Charter,Georgia,"Times New Roman",serif; font-size:1.08rem; line-height:1.75; color:var(--ink)}
+
+/* ---------- viva Q&A ---------- */
+section.viva{scroll-margin-top:4.2rem; background:var(--surface); border:1px solid var(--warn-line); border-radius:14px; padding:1.5rem 1.35rem}
+.viva .warnbar{background:var(--warn-soft); color:var(--warn); border-radius:8px; padding:.55rem .8rem; font-size:.85rem; font-weight:650; margin-bottom:1.2rem}
+.viva h2{margin:0 0 .3rem; font-size:1.22rem}
+.viva .qa{padding:.9rem 0; border-bottom:1px solid var(--line)}
+.viva .qa:last-child{border-bottom:none; padding-bottom:0}
+.viva .q{font-weight:650; font-size:.98rem; line-height:1.5; margin:0 0 .35rem}
+.viva .a{margin:0; font-family:Charter,Georgia,"Times New Roman",serif; font-size:1.05rem; line-height:1.7; color:var(--ink)}
+.viva .a code{font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:.88em; background:var(--accent-soft); color:var(--accent-ink); border-radius:5px; padding:.05em .35em}
+
+footer{color:var(--muted); font-size:.82rem; line-height:1.6; text-align:center}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">IIRS · Capstone Presentation · Team Readout</p>
+  <h1>15-Minute Team Readout Script</h1>
+  <p class="sub"><strong>15:00 target, including handoffs.</strong> This version follows the submitted 11-slide deck in order and keeps the agreed speaker order. It is written for a calm 115–125 words-per-minute delivery, not a rushed read.</p>
+</header>
+
+<div class="rules">
+  <h2>Three rules — do this before the session</h2>
+  <ol>
+    <li><strong>Read the full script once</strong>, everyone — know the whole flow, who speaks before you and who comes after you.</li>
+    <li><strong>Know your first line, main claim, and handoff without looking.</strong> Do not memorise every filler word; speak to the slide and return to the next checkpoint.</li>
+    <li><strong>Run the complete deck twice with one shared stopwatch.</strong> The slide operator advances only on the speaker's cue. If the team reaches 12:30 after Slide 9, the final section is on schedule.</li>
+  </ol>
+</div>
+
+<nav aria-label="Jump to speaker">
+  <div class="chips">
+    <a class="chip" href="#gaurav">1 Gaurav <small>3:00</small></a>
+    <a class="chip" href="#vamsi">2 Vamsi <small>1:30</small></a>
+    <a class="chip" href="#rashmi">3 Rashmi <small>2:15</small></a>
+    <a class="chip" href="#avinash">4 Avinash <small>2:00</small></a>
+    <a class="chip" href="#dinesh">5 Dinesh <small>1:45</small></a>
+    <a class="chip" href="#krishna">6 Krishna <small>1:45</small></a>
+    <a class="chip" href="#pavan">7 Pavan <small>2:45</small></a>
+    <a class="chip qa" href="#viva">Viva Q&amp;A</a>
+  </div>
+</nav>
+
+<div class="meta">
+  <div class="howto">
+    <h2>How to use (read silently, never aloud)</h2>
+    <ul>
+      <li>The small <span class="t">0:30</span> pills show elapsed time within that speaker's slot. Do not read them aloud.</li>
+      <li>Each part has a <strong>FLEX LINE</strong> immediately before the handoff. Include it by default. Skip it only when the team is more than 10 seconds behind the cumulative target.</li>
+      <li>Keep the submitted deck in its existing order. The previous draft's slide references were wrong and would have forced backward and forward jumps.</li>
+      <li>The speaker owns the verbal cue to advance. The slide operator should never guess.</li>
+    </ul>
+  </div>
+
+  <div>
+    <h2>Say it right</h2>
+    <div class="say">
+      <span><b>Loki</b> <i>LOH-kee</i></span>
+      <span><b>Tempo</b> <i>TEM-poh</i></span>
+      <span><b>Chainlit</b> <i>CHAIN-lit</i></span>
+      <span><b>LangGraph</b> <i>LANG-graaf</i></span>
+      <span><b>Triage</b> <i>TREE-aazh</i></span>
+      <span><b>Hypotheses</b> <i>hy-POTH-uh-seez</i></span>
+      <span><b>0.70</b> <i>zero point seven</i></span>
+      <span><b>0.87</b> <i>zero point eight seven</i></span>
+    </div>
+  </div>
+
+  <div>
+    <h2>Timing check (measured word counts)</h2>
+    <div class="tablebox">
+      <table>
+        <tr><th>Speaker</th><th>Slides</th><th>Slot</th><th>Cumulative target</th></tr>
+        <tr><td>Gaurav</td><td class="num">1–4</td><td class="num">3:00</td><td class="num">3:00</td></tr>
+        <tr><td>Vamsi</td><td class="num">5</td><td class="num">1:30</td><td class="num">4:30</td></tr>
+        <tr><td>Rashmi</td><td class="num">6</td><td class="num">2:15</td><td class="num">6:45</td></tr>
+        <tr><td>Avinash</td><td class="num">7</td><td class="num">2:00</td><td class="num">8:45</td></tr>
+        <tr><td>Dinesh</td><td class="num">8</td><td class="num">1:45</td><td class="num">10:30</td></tr>
+        <tr><td>Krishna</td><td class="num">9</td><td class="num">1:45</td><td class="num">12:15</td></tr>
+        <tr><td>Pavan</td><td class="num">10–11</td><td class="num">2:45</td><td class="num">15:00</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 1. GAURAV ============ -->
+<section class="speaker" id="gaurav">
+  <div class="shead">
+    <span class="snum">1</span>
+    <div class="sname">
+      <h2>Gaurav — Opening, Team, Agenda + Problem</h2>
+      <p>Slides 1–4 · establish the need and the trust boundary</p>
+    </div>
+    <span class="stime">3:00</span>
+  </div>
+  <div class="speech">
+    <p>Good morning. I am Gaurav Yadav, and our team is presenting IIRS: the Intelligent Incident Response System. IIRS is a local incident-response assistant that turns logs, metrics, traces, and runbook guidance into a structured Incident Brief with ranked causes, cited evidence, and safe next steps.</p>
+    <p><span class="t">0:25</span><strong>[Advance to Slide 2]</strong> This is our seven-member team: Vamsi, Rashmi, Avinash, Dinesh, Krishna, Pavan, and me. You will hear from us in this same order, with each person answering the next question in the story.</p>
+    <p><span class="t">0:40</span><strong>[Advance to Slide 3]</strong> We will first define the incident-response problem, then show our objectives, architecture, workflow, and technology choices. Finally, we will compare two captured system outputs: a case with no confirmed fault and a likely service failure.</p>
+    <p><span class="t">1:00</span><strong>[Advance to Slide 4]</strong> The problem is not a lack of telemetry. Distributed applications already produce huge volumes of it. The problem is correlation. During an incident, an on-call engineer must move between a metrics tool, a log tool, and a tracing tool; identify the relevant time window; connect symptoms across services; consult a runbook; and decide what is safe to do. Under pressure, that manual process is slow and inconsistent, especially for an L1 responder.</p>
+    <p><span class="t">1:45</span>IIRS automates that first investigation, but we deliberately did not build an autonomous fixer. We set four trust requirements. First, <strong>evidence-grounded</strong>: a diagnosis must cite the telemetry or knowledge that supports it. Second, <strong>auditable</strong>: each stage and tool call is recorded in a JSON trace. Third, <strong>safe by design</strong>: diagnostic checks are read-only by default. Fourth, <strong>human in the loop</strong>: restart, rollback, failover, reconfiguration, or traffic changes remain approval-gated recommendations.</p>
+    <p><span class="t">2:35</span>Our central claim is therefore modest and testable: IIRS does not replace the on-call engineer. It assembles the first evidence-backed diagnosis and makes its reasoning inspectable.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>The demonstration environment is reproducible locally: Aspire Shop, the observability stack, the IIRS pipeline, and both CLI and chat entry points can run on one development machine.</p>
+  </div>
+  <div class="speech">
+    <p>Vamsi will now translate that claim into the concrete objectives we implemented.</p>
+  </div>
+</section>
+
+<!-- ============ 2. VAMSI ============ -->
+<section class="speaker" id="vamsi">
+  <div class="shead">
+    <span class="snum">2</span>
+    <div class="sname">
+      <h2>Vamsi — Objectives</h2>
+      <p>Slide 5 · turn the problem into measurable system outputs</p>
+    </div>
+    <span class="stime">1:30</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Gaurav. The slide lists six objectives, but they form three practical outcomes.</p>
+    <p><span class="t">0:15</span>First, <strong>create one evidence path</strong>. We collect application telemetry through OpenTelemetry and make logs, metrics, and traces queryable through Loki, Prometheus, and Tempo. This gives the system a common time window and service context instead of three disconnected views.</p>
+    <p><span class="t">0:45</span>Second, <strong>turn evidence into a diagnosis</strong>. The pipeline ranks likely root causes, attaches confidence scores, cites the supporting evidence IDs, and produces suggested next checks. The output is a fixed Incident Brief rather than an unstructured chatbot answer.</p>
+    <p><span class="t">1:05</span>Third, <strong>make the result usable and reviewable</strong>. Engineers can see the result in Chainlit or reproduce it from the command line, while the full run is written to a trace for audit and evaluation. These objectives define what success means for the project.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>We also kept the current scope reactive: IIRS starts from an alert or engineer prompt; it does not continuously detect incidents on its own.</p>
+  </div>
+  <div class="speech">
+    <p>Rashmi will now show how the four-stage architecture delivers these objectives.</p>
+  </div>
+</section>
+
+<!-- ============ 3. RASHMI ============ -->
+<section class="speaker" id="rashmi">
+  <div class="shead">
+    <span class="snum">3</span>
+    <div class="sname">
+      <h2>Rashmi — System Architecture</h2>
+      <p>Slide 6 · four stages with explicit contracts</p>
+    </div>
+    <span class="stime">2:15</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Vamsi. IIRS is a fixed four-stage pipeline: Retriever, Analyst, Critic, and Planner. Calling out the boundaries matters because not every stage should use generative AI.</p>
+    <p><span class="t">0:20</span>The <strong>Retriever</strong> is deterministic and tooling-based. It queries Loki for logs, Prometheus for metrics, Tempo for traces, and relevant local runbooks. It packages every result into an Evidence Bundle with a unique ID. Keeping retrieval deterministic makes the evidence foundation reproducible.</p>
+    <p><span class="t">0:50</span>The <strong>Analyst</strong> is LLM-backed. It reads that bundle and produces ranked root-cause hypotheses. Each hypothesis includes a confidence score, supporting and contradicting evidence IDs, and next checks. The prompt requires evidence references, but that instruction alone is not enough.</p>
+    <p><span class="t">1:20</span>So the <strong>Critic</strong>, also LLM-backed, reviews the same evidence and challenges the Analyst. It flags weak citations, alternative explanations, missing data, and unsafe assumptions. Its role is not to guarantee that hallucination is impossible; its role is to expose unsupported reasoning before it reaches the operator.</p>
+    <p><span class="t">1:50</span>Finally, the <strong>Planner</strong> converts the reviewed state into an Incident Brief. It places read-only diagnostic steps under auto-safe and any mutating action under needs-approval. LangGraph passes a shared structured state through this fixed sequence, and a local fallback runner preserves the same stages when LangGraph is unavailable.</p>
+    <p><span class="t">2:05</span>That architecture explains who does what.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>The fixed sequence is an MVP trade-off: it is predictable and testable, but it does not yet loop back to collect new evidence when the Critic finds a gap.</p>
+  </div>
+  <div class="speech">
+    <p>Avinash will now follow one incident through the complete data flow.</p>
+  </div>
+</section>
+
+<!-- ============ 4. AVINASH ============ -->
+<section class="speaker" id="avinash">
+  <div class="shead">
+    <span class="snum">4</span>
+    <div class="sname">
+      <h2>Avinash — End-to-End Workflow</h2>
+      <p>Slide 7 · from application signal to auditable brief</p>
+    </div>
+    <span class="stime">2:00</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Rashmi. This slide shows eight steps, which I will group into collection, reasoning, and delivery.</p>
+    <p><span class="t">0:15</span>In the <strong>collection phase</strong>, Aspire Shop generates telemetry. It is a .NET microservices application with a frontend, catalog and basket services, PostgreSQL, and Redis. The services emit OTLP data to the OpenTelemetry Collector. The Collector exports logs to Loki, metrics for Prometheus to scrape, and traces to Tempo.</p>
+    <p><span class="t">0:50</span>When an engineer submits an alert or a plain-English incident prompt, the Python backend parses the service, environment, summary, and time window. The Retriever then asks only the parameterised queries relevant to that incident. The results become structured evidence items such as a connection-refused log, an up-status metric, a failed span, or a runbook excerpt.</p>
+    <p><span class="t">1:20</span>In the <strong>reasoning phase</strong>, the Analyst, Critic, and Planner receive that structured state in sequence. They rank hypotheses, test the evidence chain, and separate diagnostic checks from approval-required remediation.</p>
+    <p><span class="t">1:40</span>In the <strong>delivery phase</strong>, Chainlit renders stage progress and the final Incident Brief. The same pipeline can run from the <code>iirs</code> command line for reproducibility. Every completed run also writes a JSON trace containing the alert, evidence, agent outputs, execution modes, and final brief.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>After the brief, follow-up questions such as “why?” or “what should I do first?” are answered from the saved incident state without running retrieval again.</p>
+  </div>
+  <div class="speech">
+    <p>Dinesh will now explain the technologies behind this workflow and why each one is present.</p>
+  </div>
+</section>
+
+<!-- ============ 5. DINESH ============ -->
+<section class="speaker" id="dinesh">
+  <div class="shead">
+    <span class="snum">5</span>
+    <div class="sname">
+      <h2>Dinesh — Technology Stack</h2>
+      <p>Slide 8 · one reason for each technology choice</p>
+    </div>
+    <span class="stime">1:45</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Avinash. This stack is intentionally conventional because the project risk is in evidence correlation and safe reasoning, not in inventing infrastructure.</p>
+    <p><span class="t">0:15</span><strong>Python</strong> hosts the pipeline, data models, adapters, CLI, and evaluation code. <strong>LangGraph</strong> orchestrates the shared state across the four stages. <strong>GPT-5 mini</strong> powers the Analyst, Critic, Planner, and follow-up responses when model mode is enabled; the Retriever remains deterministic.</p>
+    <p><span class="t">0:50</span><strong>Chainlit</strong> provides the chat interface and its web stack uses FastAPI underneath. To be precise, this repository does not define a separate FastAPI application; our application code integrates through Chainlit. The CLI exercises the same pipeline without the browser.</p>
+    <p><span class="t">1:15</span><strong>Docker Compose</strong> runs the local observability services. <strong>OpenTelemetry</strong> gives us a vendor-neutral telemetry protocol and Collector. <strong>Loki, Prometheus, and Tempo</strong> then provide the three evidence types: logs explain what happened, metrics show scale and health, and traces show the request path across dependencies.</p>
+    <p><span class="t">1:30</span>The important point is that each technology has one clear responsibility.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>Model-backed runs fail explicitly on timeout or invalid structured output instead of silently switching to a different answer.</p>
+  </div>
+  <div class="speech">
+    <p>Krishna will now show the first output: whether IIRS can remain conservative when there is no confirmed fault.</p>
+  </div>
+</section>
+
+<!-- ============ 6. KRISHNA ============ -->
+<section class="speaker" id="krishna">
+  <div class="shead">
+    <span class="snum">6</span>
+    <div class="sname">
+      <h2>Krishna — Case 1: Normal Operation</h2>
+      <p>Slide 9 · test restraint before fault detection</p>
+    </div>
+    <span class="stime">1:45</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Dinesh. Before asking whether IIRS detects a fault, we tested whether it can avoid inventing one. That is the safer first test for an incident-response assistant.</p>
+    <p><span class="t">0:20</span>In this captured run, the core Aspire Shop services appeared healthy, but the evidence included a transient high-latency trace. A single slow request is suspicious evidence, not proof of an outage. An overconfident system could turn that noise into a false diagnosis and an unnecessary remediation recommendation.</p>
+    <p><span class="t">0:50</span>The model-backed Incident Brief ranked <strong>“No clear live fault detected”</strong> first, with a displayed confidence of zero point seven. It did not recommend remediation. But the Critic also flagged that the 2.26-second trace still required log and span correlation before “healthy” could be treated as final.</p>
+    <p><span class="t">1:20</span>We should not treat zero point seven as a statistically calibrated probability; it is the pipeline's relative confidence for this run. The useful behaviour is the combination: a conservative top hypothesis, an explicit contradiction, and read-only next checks instead of a mutating action.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>This healthy case is also part of the offline regression suite, so a future prompt change that turns the same evidence into an outage diagnosis will fail the rubric.</p>
+  </div>
+  <div class="speech">
+    <p>Pavan will now contrast this with the captured failure case and then close the presentation.</p>
+  </div>
+</section>
+
+<!-- ============ 7. PAVAN ============ -->
+<section class="speaker" id="pavan">
+  <div class="shead">
+    <span class="snum">7</span>
+    <div class="sname">
+      <h2>Pavan — Case 2, Evidence of Quality + Conclusion</h2>
+      <p>Slides 10–11 · investigate a likely failure, then close honestly</p>
+    </div>
+    <span class="stime">2:45</span>
+  </div>
+  <div class="speech">
+    <p>Thank you, Krishna. <strong>[Slide 10]</strong> In the second captured run, runtime inspection did not observe <code>catalogservice</code> in Docker or the local process list. That is a much stronger failure signal than one slow trace.</p>
+    <p><span class="t">0:35</span>The Retriever was tooling-based and the other three stages were model-backed. The pipeline ranked <strong>“catalogservice unavailable”</strong> first, with a displayed confidence of zero point eight seven. However, recent catalog logs conflicted with the missing-process signal. The Critic therefore required process, reachability, and health-endpoint checks before any restart. This is the safety design working: make the likely cause visible without pretending contradictory evidence has disappeared.</p>
+    <p><span class="t">1:15</span>We also evaluate behaviour separately from the screenshots. Our offline command, <code>iirs eval</code>, runs fixed routing and pipeline cases against explicit rubrics. The latest deterministic baseline, which we re-ran today, passes two out of two suites, nine out of nine cases, and forty-six out of forty-six checks. These checks cover routing, top diagnosis, evidence citation, trace creation, and approval boundaries. This is a regression baseline, not proof that the system handles every production incident.</p>
+    <p><span class="t">1:55</span><strong>[Advance to Slide 11]</strong> Our conclusion is that the prototype demonstrates a complete, inspectable path from telemetry to an Incident Brief. Its strengths are separation of responsibilities, evidence-linked reasoning, per-run traces, and explicit human control over mutating actions.</p>
+    <p><span class="t">2:20</span>The next work should focus on broader incident coverage, deployment-change correlation, richer runbook retrieval, real-time alert prioritisation, and carefully approval-gated remediation. The limitations are equally important: our evaluation corpus is still small, the Retriever uses fixed query templates, and the system is reactive rather than continuously monitoring.</p>
+  </div>
+  <div class="buffer">
+    <span class="blabel">Flex line — skip only if more than 10 seconds late</span>
+    <p>The target is not autonomous remediation first. The safer path is to expand evidence and evaluation coverage before adding any executor capability.</p>
+  </div>
+  <div class="speech">
+    <p><span class="t">2:40</span>IIRS does not ask an operator to trust a confident answer blindly. It gives the operator an answer they can inspect. Thank you. We are ready for questions.</p>
+  </div>
+</section>
+
+<!-- ============ VIVA Q&A ============ -->
+<section class="viva" id="viva">
+  <h2>Viva Q&amp;A — quick answers</h2>
+  <div class="warnbar">Question round only. Do NOT read this during the 15-minute presentation.</div>
+
+  <div class="qa">
+    <p class="q">Slide says FastAPI — where exactly is FastAPI used?</p>
+    <p class="a">Through Chainlit's server stack. Our repository does not define a separate FastAPI application or custom REST endpoints. The second entry point is the <code>iirs</code> CLI, which invokes the same pipeline without the web UI.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Why is the pipeline linear? Why no loops between agents?</p>
+    <p class="a">Deliberate. Linear means predictable, auditable, and easy to test. The Critic already gives in-pipeline feedback without loops. Loops add non-termination risk.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Why is the Retriever deterministic — isn't that a limitation?</p>
+    <p class="a">Yes, it is both a safety choice and a limitation. Parameterised queries make retrieval reproducible and prevent invented queries, but the Retriever cannot dynamically decide that a novel signal is needed. Adaptive retrieval is future work.</p>
+  </div>
+  <div class="qa">
+    <p class="q">What stops the LLM from hallucinating a root cause?</p>
+    <p class="a">Nothing makes hallucination impossible. We reduce the risk with structured evidence IDs, prompts that require supporting and contradicting citations, a separate Critic pass, strict output schemas, approval gating, and regression evals. The operator can inspect the trace instead of trusting prose alone.</p>
+  </div>
+  <div class="qa">
+    <p class="q">What if Prometheus or Loki is down? What if the LLM call fails?</p>
+    <p class="a">Missing or unreachable telemetry raises <code>TelemetryConfigurationError</code> or <code>TelemetryRequestError</code>. A model timeout or invalid structured output raises <code>OpenAIRequestError</code>. Model-backed runs stop instead of silently replacing the answer with deterministic reasoning.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Can IIRS catch a dependency failure — say Postgres down but the alert is on catalog service?</p>
+    <p class="a">Yes — that is exactly what the trace and metric evidence enables. Catalog service shows timeouts, but Tempo traces and the Postgres up-metric point to the database as the real cause. Our fault-injection script can stop Postgres or Redis to reproduce this.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Difference between iirs eval and iirs verify-live?</p>
+    <p class="a"><code>eval</code> is an offline regression harness over fixed routing and pipeline cases. The current 46/46 result was run with OpenAI disabled, so it proves deterministic baseline behaviour, not model accuracy. <code>verify-live</code> separately checks that the PLT backends contain expected PostgreSQL or Redis fault signals.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Why OpenAI and not a local model?</p>
+    <p class="a">We chose GPT-5 mini for reliable structured output and reasoning within the project schedule. Model access is isolated in <code>src/iirs/llm.py</code>, and the base URL can target an OpenAI-compatible endpoint. A non-compatible provider would still require adapter work and fresh evaluation.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Are the 0.70 and 0.87 confidence scores calibrated probabilities?</p>
+    <p class="a">No. They are model or pipeline confidence values used to rank hypotheses within a run. We do not yet have enough labelled incidents to claim statistical calibration. We judge the current prototype through ranked outcomes, citations, safety checks, and fixed-case regressions.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Does the 46/46 eval prove the AI works in production?</p>
+    <p class="a">No. It proves that nine fixed cases currently satisfy forty-six explicit checks. That is useful regression evidence, but the corpus is small and the latest baseline is deterministic. Broader labelled incidents and model-enabled evaluation are required before production claims.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Were the two outputs shown on Slides 9 and 10 actually model-backed?</p>
+    <p class="a">Yes. Their matching JSON traces record the Retriever as <code>tooling</code> and the Analyst, Critic, and Planner as <code>model</code>. Keep that separate from the 46/46 offline eval result, which is the deterministic regression baseline.</p>
+  </div>
+  <div class="qa">
+    <p class="q">Do the JSON traces contain the model's private chain of thought?</p>
+    <p class="a">No. They contain the structured, auditable artifacts we need: evidence, hypotheses, critique findings, action plan, execution modes, timestamps, tool calls, and summaries. We do not claim to store hidden chain-of-thought reasoning.</p>
+  </div>
+  <div class="qa">
+    <p class="q">What exactly is live in the demonstration?</p>
+    <p class="a">Aspire Shop and the local PLT stack can run live, and evidence IDs with <code>.live.</code> indicate the PLT backend path. The submitted slides show captured runs. For PostgreSQL and Redis, <code>iirs verify-live</code> validates expected signals separately; it does not validate the quality of the LLM diagnosis.</p>
+  </div>
+  <div class="qa">
+    <p class="q">What are the most important current limitations?</p>
+    <p class="a">Small eval corpus, deterministic template-based retrieval, only two live fault-signature profiles, no continuous monitoring loop, no autonomous executor, and an externally fetched Aspire Shop dependency. These boundaries are deliberate and documented.</p>
+  </div>
+</section>
+
+<footer>
+  IIRS — Intelligent Incident Response System · 7 speakers · 15:00 total<br>
+  Revised against the submitted 11-slide deck and verified repository traces
+</footer>
+
+</div>
